@@ -1,3 +1,6 @@
+# From https://groups.google.com/g/mdnalysis-discussion/c/umDpvbCmQiE/m/FKtNClazAwAJ
+# Author: Richard Gowers
+
 from MDAnalysis.transformations.base import TransformationBase
 import numpy as np
 class GroupHug(TransformationBase):
