@@ -1,10 +1,11 @@
-import argparse
+# adapted from pentest.py by CHARMM-GUI
+
 import sys
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
 import networkx as nx
 import re
 import numpy as np
-import itertools
-
+import MDAnalysis.transformations as trans
 import MDAnalysis as mda
 
 _s = re.compile('\s+')
@@ -204,26 +205,24 @@ def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
 
 
 
-def check_universe_ring_penetration(universe):
+def check_universe_ring_penetration(universe,
+                                    selection='not resname TIP3 and not (name H*)',
+                                    verbose=False):
     output_text = []
-    selection = 'not resname TIP3 and not (name H*)'
-    
+
     top = build_topology(universe, selection)
     ag = universe.select_atoms(selection)
     for frame, ts in enumerate(universe.trajectory):
-#        print('In frame', frame)
         output_text.append('In frame %d' % frame)
         coord = dict(zip(ag.ids + 1, ag.positions))
         if len(top.nodes()) != len(coord):
-            raise AtomMismatch('Number of atoms does not match')
-
-#        print('%lipid ring pentration')
-        output_text.append('%lipid ring pentration')
+            raise ValueError('Number of atoms does not match')
         #  only rect pbc have been tested
-        pairs, rings = check_ring_penetration(top, coord)
+        pairs, rings = check_ring_penetration(top, coord, verbose=verbose)
         if pairs:
- #           print('found a ring penetration:')
             output_text.append('found a ring penetration:')
+            output_text.append('segid index resid resname atomname')
+
             for i, cycle in enumerate(rings):
                 output_text.append('- %s %s %s %s %s | %s %s %s %s %s' % (
                 top.nodes[pairs[i][0]]['segid'],
@@ -237,3 +236,51 @@ def check_universe_ring_penetration(universe):
                 top.nodes[cycle[0]]['resname'],
                 ' '.join([top.nodes[num]['name'] for num in cycle])))
     return output_text
+
+
+def main():
+    parser = ArgumentParser(
+        description=__doc__,
+        formatter_class=RawDescriptionHelpFormatter)
+    parser.add_argument("--trajectory", default=None, required=True,
+                        help="trajectory or pdb file")
+    parser.add_argument("--topology", default=None, required=True,
+                        help="topology file that contains boned information e.g. tpr")
+    parser.add_argument("--structure", default=None, required=False,
+                        help="structure file e.g. gro or pdb format")
+    parser.add_argument("-s", "--selection", default="not resname TIP3 and not (name H*)",
+                        help="selection for atoms to check for pentration")
+    parser.add_argument("-o", "--output", default=None,
+                        help="output file")
+    parser.add_argument("-v", "--verbose", default=False, action="store_true")
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        print('checking pentration of %s' % args.selection)
+
+    if args.structure:
+        universe = mda.Universe(args.structure, args.trajectory)
+        universe_bonded = mda.Universe(args.topology)
+        universe.add_bonds(universe_bonded.bonds.to_indices())
+    else:
+        universe = mda.Universe(args.topology, args.trajectory)
+
+    # unwrap/make_whole all selected atoms.
+    universe.trajectory.add_transformations(trans.unwrap(universe.select_atoms(args.selection)))
+
+    output_text = check_universe_ring_penetration(universe, args.selection, verbose=args.verbose)
+
+    if args.output:
+        fp = open(args.output, 'w')
+        for line in output_text:
+            fp.write(line + '\n')
+        fp.close()
+    else:
+        for line in output_text:
+            print(line)
+        if len(output_text) == 1:
+            print('No pentration found')
+
+if __name__ == '__main__':
+    sys.exit(main())
