@@ -18,7 +18,9 @@ import nglview as nl
 
 import dask.dataframe as dd
 
-from a7msm import *
+from ..util.utils import *
+from ..datafiles import BGT, EPJ, EPJPNU
+
 
 pathways = [
               'BGT_EPJPNU',
@@ -104,10 +106,8 @@ resid_selection = "name CA"
 
 structure_list = ["BGT_EPJPNU", "EPJ_BGT", "EPJPNU_EPJ"]
 pdb_file = []
-for structure in structure_list:
-    #    print('running for ',structure)
-    traj_note = pwd + '/../PRODUCTION/' + structure + '/SEEDS_0/protein.pdb'
-    pdb_file.append(traj_note)
+for structure in BGT, EPJ, EPJPNU:
+    pdb_file.append(structure)
 u_ref = mda.Universe(pdb_file[0], *pdb_file)
 
 aligner_ref = align.AlignTraj(
