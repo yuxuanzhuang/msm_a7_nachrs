@@ -51,3 +51,8 @@ class SLURMJob(object):
             )
 
         print('job is canceled')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # make sure the dbconnection gets closed
+        self.cancel_worker()
+        return False

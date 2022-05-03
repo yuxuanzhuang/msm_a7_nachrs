@@ -1,7 +1,7 @@
 #  add dask workers in Lindahl TCBLAB CLuster
 import netifaces as ni
 import subprocess
-from slurmjob import SLURMJob
+from .slurmjob import SLURMJob
 
 import dask
 

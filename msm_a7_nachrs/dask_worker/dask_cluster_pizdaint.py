@@ -1,7 +1,7 @@
 #  add dask workers in piz-daint CLuster
 import socket
 import subprocess
-from slurmjob import SLURMJob
+from .slurmjob import SLURMJob
 ip_address = socket.gethostbyname(socket.gethostname())
 port = 8786
 

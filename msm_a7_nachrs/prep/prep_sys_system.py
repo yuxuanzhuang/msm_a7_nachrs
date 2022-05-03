@@ -5,9 +5,9 @@ import shutil
 import subprocess
 from functools import partial
 
-from ring_penetration import *
+from ..util.ring_penetration import check_universe_ring_penetration
 from MDAnalysis.transformations.wrap import unwrap
-
+import MDAnalysis as mda
 import argparse
 
 # Create the parser
@@ -25,6 +25,7 @@ seed_loc = args.seed_loc
 def run_command(seed_gpu_id, system):
     seed = seed_gpu_id[0]
     gpu_id = seed_gpu_id[1]
+    #TODO: make this a function
     command = f"/nethome/yzhuang/anaconda3/envs/deeplearning/bin/python build_system.py --system {system} --seed {seed} --gpu_id {gpu_id}"
     print(command)
     p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
@@ -35,8 +36,6 @@ def run_command(seed_gpu_id, system):
 
     process = multiprocessing.current_process()
     with open('prep_output/ ' + system + '_' + seed + '_' + str(process.pid) + '.output', 'w') as f:
-#        f.writelines(output)
-#        f.writelines(err)
         f.write('finish')
 
     #This will give you the output of the command being executed
@@ -74,6 +73,7 @@ pool = Pool(4)
 system = args.system
 seeds = os.listdir('../' + seed_loc + f'/{system}/')
 
+# need more than enough GPU_ids to iterate 
 gpu_ids = [0, 1, 2, 3] * 20
 run_command_para = partial(run_command,
                         system=system)
