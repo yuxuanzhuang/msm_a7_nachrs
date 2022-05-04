@@ -75,8 +75,12 @@ def score_cv(data, dim, lag, number_of_splits=10, validation_fraction=0.5):
 
 
 class MSMInitializer(object):
+    prefix="msm"
+
     def __init__(self,
                  feature_selection,
+                 multimer=5,
+                 symmetrize=True,
                  updating=True,
                  lag=100,
                  start=0,
@@ -90,6 +94,9 @@ class MSMInitializer(object):
         self.lag = lag
         self.feature_selection = feature_selection
         self.start = start
+        self.multimer = multimer
+        self.symmetrize = symmetrize
+
         self.pathways = pathways
         self.updating = updating
         self.feature_file = feature_file
@@ -131,6 +138,8 @@ class MSMInitializer(object):
 
         self.data_collected = False
 
+        os.makedirs(self.filename, exist_ok=True)
+
     def add_features(self,
                      feature_selection,
                      domain_exclusion=[]):
@@ -158,9 +167,13 @@ class MSMInitializer(object):
     def add_trajectories(self,
                          feature_file= 'msm_features_new.pickle',
                          pathways = traj_notes,
-                         start=0,
+                         start=None,
                          system_exclusion_dic = system_exclusion_dic,
                          domain_exclusion= []):
+        
+        if start is None:
+            start=self.start
+            
         if self.data_collected:
             raise ValueError('Feature already collected, create new instance')
 
@@ -195,18 +208,6 @@ class MSMInitializer(object):
                 
         self.feature_info.append(feature_info[feed_feature_indice])
         self.all_feed_feature_indice.append(feed_feature_indice)        
-        
-    def start_tica_analysis(self):
-        if (not os.path.isfile(self.filename  + 'tica.pyemma')) or self.updating:
-            print('Start new TICA analysis')
-            self.start_analysis()
-
-        else:
-            print('Load old TICA results')
-            self.tica = pyemma.load(self.filename  + 'tica.pyemma')
-            self.tica_output = pickle.load(open(self.filename  + 'output.pickle', 'rb'))
-            self.tica_concatenated = np.concatenate(self.tica_output)
-
 
     def load_raw_data(self, feature_selection, feature_index, ensemble_index):
         #TODO: feature dim 1 not work
@@ -226,12 +227,16 @@ class MSMInitializer(object):
         for sys, df in md_data.groupby(['system']):
             sys_data = raw_data[df.index[0] + self.all_start[ensemble_index]:df.index[-1]+1][::self.interval]
             total_shape = sys_data.shape[1]
-            per_shape = int(total_shape / 5)
+            per_shape = int(total_shape / self.multimer)
             
+            if self.symmetrize:
             #  symmetrization of features
-            for permutation in range(5):
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                    permutation, axis=1).reshape(sys_data.shape[0],total_shape))
+                for permutation in range(self.multimer):
+                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],self.multimer,per_shape),
+                        permutation, axis=1).reshape(sys_data.shape[0],total_shape))
+            else:
+                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],self.multimer,per_shape),
+                        0, axis=1).reshape(sys_data.shape[0],total_shape))
                 
         del raw_data
         del sys_data
@@ -258,7 +263,27 @@ class MSMInitializer(object):
             gc.collect()
         self.data_collected = True
         self.feature_trajectories = list(itertools.chain.from_iterable(all_feature_data))
+        self.n_trajectories = len(self.feature_trajectories)
     #    self.feature_trajectories = list(np.concatenate(all_feature_data))
+
+
+    def dump_feature_trajectories(self):
+        if self.data_collected:
+            for ind, feature_matrix in enumerate(self.feature_trajectories):
+                np.save(self.filename + f'feature_traj_{ind}.npy', feature_matrix)
+            print('Feature matrix saved')
+            self.data_collected = False
+
+        del self.feature_trajectories
+        gc.collect()
+
+    def get_feature_trajectories(self):
+        if self.data_collected:
+            return self.feature_trajectories
+        else:
+            self.feature_trajectories = []
+            for ind in range(self.n_trajectories):
+                self.feature_trajectories.append(np.load(self.filename + f'feature_traj_{ind}.npy', allow_pickle=True))
 
     def start_analysis(self):
         raise NotImplementedError("Should be overridden by subclass")
@@ -360,8 +385,8 @@ class MSMInitializer(object):
 
     @property
     def filename(self):
-        return './msmfile/' + self.feature_selection + '_lag' + str(self.lag) + '_start' + str(self.start) + '_pathway' + ''.join([str(pathway_ind_dic[pathway]) for pathway in self.pathways]) + '_'
+        return './msmfile/' + self.prefix + '_' + self.feature_selection + '_lag' + str(self.lag) + '_start' + str(self.start) + '_pathway' + ''.join([str(pathway_ind_dic[pathway]) for pathway in self.pathways]) + '/'
     
     @property
     def cluster_filename(self):
-        return self.filename + '_cluster' + str(self.n_clusters) + '_tic' + '_'.join([str(m_tic) for m_tic in self.meaningful_tic]) + '_'
+        return self.filename + 'cluster' + str(self.n_clusters) + '_tic' + '_'.join([str(m_tic) for m_tic in self.meaningful_tic]) + '_'

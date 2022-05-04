@@ -45,31 +45,31 @@ system_exclusion_dic = {'BGT_EPJPNU': [],
 
 
 class TICAInitializer(MSMInitializer):
-    def start_tica_analysis(self):
+    prefix="tica"
+
+    def start_analysis(self):
+
         if (not os.path.isfile(self.filename  + 'tica.pyemma')) or self.updating:
             print('Start new TICA analysis')
-            self.start_analysis()
+            if not self.data_collected:
+                self.gather_feature_matrix()
+
+            self.tica = pyemma.coordinates.tica(self.feature_trajectories, lag=self.lag)
+                    
+            self.tica_output = self.tica.get_output()
+            self.tica_concatenated = np.concatenate(self.tica_output)
+            self.tica.save(self.filename + 'tica.pyemma', overwrite=True)
+            pickle.dump(self.tica_output, open(self.filename  + 'output.pickle', 'wb'))
+            self.dump_feature_trajectories()
+            gc.collect()
 
         else:
             print('Load old TICA results')
             self.tica = pyemma.load(self.filename  + 'tica.pyemma')
             self.tica_output = pickle.load(open(self.filename  + 'output.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
-
-
-    def start_analysis(self):
-        if not self.data_collected:
-            self.gather_feature_matrix()
-
-        self.tica = pyemma.coordinates.tica(self.feature_trajectories, lag=self.lag)
-                
-        self.tica_output = self.tica.get_output()
-        self.tica_concatenated = np.concatenate(self.tica_output)
-        self.tica.save(self.filename + 'tica.pyemma', overwrite=True)
-        pickle.dump(self.tica_output, open(self.filename  + 'output.pickle', 'wb'))
-        gc.collect()
         
-        
+
     def clustering_with_dask(self, meaningful_tic, n_clusters, updating=False):
         self.n_clusters = n_clusters
         self.meaningful_tic = meaningful_tic
