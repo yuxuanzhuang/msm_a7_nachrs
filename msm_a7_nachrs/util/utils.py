@@ -47,12 +47,14 @@ domain_structure_annotation = {
     }
 }
 
-traj_notes = ['BGT_EPJ',
+traj_notes = [
               'BGT_EPJPNU',
-              'EPJPNU_EPJ',
+              'BGT_EPJ',
               'EPJPNU_BGT',
+              'EPJPNU_EPJ',
               'EPJ_BGT',
-              'EPJ_EPJPNU']
+              'EPJ_EPJPNU'
+              ]
 
 production_dic = {'traj_note': traj_notes,
                  'load_location': ["".join(i) for i in itertools.product([pwd + '/../PRODUCTION/'], traj_notes)],

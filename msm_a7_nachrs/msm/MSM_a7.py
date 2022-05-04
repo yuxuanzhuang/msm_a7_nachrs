@@ -5,18 +5,10 @@ import pyemma
 import pickle
 from scipy.stats import pearsonr
 
-#from dask_ml.cluster import KMeans
-
 import gc
 import itertools
 import MDAnalysis as mda
-import MDAnalysis.transformations as trans
-from MDAnalysis.analysis import align, pca, rms
-
-#import pmda.rms
-import nglview as nl
-
-import dask.dataframe as dd
+from MDAnalysis.analysis import align
 
 from ..util.utils import *
 from ..datafiles import BGT, EPJ, EPJPNU
@@ -40,79 +32,13 @@ pathway_ind_dic = {
               'EPJ_EPJPNU': 6
 }
 
-n_seeds_dic = {
-              'BGT_EPJPNU': 24,
-              'BGT_EPJ': 24,
-              'EPJPNU_BGT': 25,
-              'EPJPNU_EPJ': 24,
-              'EPJ_BGT': 24,
-              'EPJ_EPJPNU': 24
-}
-
-"""
-1: 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-2: 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
-3: 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72
-4: 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96
-5: 97 98 99 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20
-6: 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44
-"""
-
 #  exclused seeds from MSM
 system_exclusion_dic = {'BGT_EPJPNU': [],
-                   'BGT_EPJ': [19],
-                   'EPJPNU_BGT': [19, 20, 21],
-                   'EPJPNU_EPJ': [],
-                   'EPJ_BGT': [],
-                   'EPJ_EPJPNU': []}
-
-new_system_exclusion_dic = {'BGT_EPJPNU': [],
                    'BGT_EPJ': [],
                    'EPJPNU_BGT': [],
                    'EPJPNU_EPJ': [],
                    'EPJ_BGT': [],
                    'EPJ_EPJPNU': []}
-
-
-
-
-pdb = '../PRODUCTION/BGT_EPJPNU/SEEDS_0/protein.pdb'
-
-traj_notes = [
-              'BGT_EPJPNU',
-              'BGT_EPJ',
-              'EPJPNU_BGT',
-              'EPJPNU_EPJ',
-              'EPJ_BGT',
-              'EPJ_EPJPNU'
-              ]
-
-production_dic = {'traj_note': traj_notes,
-                 'load_location': ["".join(i) for i in itertools.product([pwd + '/../PRODUCTION/'], traj_notes)],
-                 'save_location': [pwd + '/../ANALYSIS/two_traj/'] * len(traj_notes),
-                 'skip': [1] * len(traj_notes)}
-
-traj_note_dic = production_dic
-
-trajectory_list = []
-for traj_note, load_location in zip(
-    traj_note_dic["traj_note"], traj_note_dic["load_location"]
-):
-    for seed in sorted(os.listdir(load_location), key=natural_keys):
-        if seed.startswith("SEEDS"):
-            trajectory_list.append(load_location + "/" + seed + "/protein.xtc")
-
-resid_selection = "name CA"
-
-structure_list = ["BGT_EPJPNU", "EPJ_BGT", "EPJPNU_EPJ"]
-pdb_file = []
-for structure in BGT, EPJ, EPJPNU:
-    pdb_file.append(structure)
-u_ref = mda.Universe(pdb_file[0], *pdb_file)
-
-aligner_ref = align.AlignTraj(
-    u_ref, u_ref, select=resid_selection, in_memory=True
-).run()
 
 def score_cv(data, dim, lag, number_of_splits=10, validation_fraction=0.5):
     """Compute a cross-validated VAMP2 score.
@@ -148,80 +74,131 @@ def score_cv(data, dim, lag, number_of_splits=10, validation_fraction=0.5):
     return scores
 
 
-
 class MSMInitializer(object):
-    def __init__(self, tica_file, updating=False, lag=20, start=0,
-                 pathways=['BGT_EPJPNU',
-                           'BGT_EPJ',
-                           'EPJPNU_BGT',
-                           'EPJPNU_EPJ',
-                           'EPJ_BGT',
-                           'EPJ_EPJPNU'],
+    def __init__(self,
+                 feature_selection,
+                 updating=True,
+                 lag=100,
+                 start=0,
+                 pathways = traj_notes,
                  system_exclusion_dic = system_exclusion_dic,
                  domain_exclusion = [],
                  feature_file = 'msm_features.pickle',
-                 extra_feature_file = None,
-                 extra_system_exclusion_dic = new_system_exclusion_dic):
+                 interval=1):
+
+        # lag for # of frames
         self.lag = lag
-        self.tica_file = tica_file
+        self.feature_selection = feature_selection
         self.start = start
         self.pathways = pathways
         self.updating = updating
         self.feature_file = feature_file
         self.system_exclusion_dic = system_exclusion_dic
-        
+        self.interval = interval
         self.md_data = pd.read_pickle(self.feature_file)
-#        self.md_data = self.md_data.applymap(lambda x: x.replace('/mnt/cephfs/projects/2020100800_alpha7_nachrs/MSM',
-#                           '/mnt/cephfs/projects/2021072000_nachrs_a7_msm/a7_nachrs') if isinstance(x, str) else x)
+#        self.md_data = self.md_data[self.md_data.frame % (3 * self.interval) == 0]
+
         # dt: ns
-        self.dt = (self.md_data.traj_time[1] - self.md_data.traj_time[0]) / 1000
+        self.dt = (self.md_data.traj_time[1] - self.md_data.traj_time[0]) / 1000 * self.interval
         print(f'lag time is {self.lag * self.dt} ns')
+
         system_exclusion = []
-        offset = 0
-        for ind, pathway in enumerate(self.pathways):
+        for pathway in self.pathways:
             for exclu_seed in system_exclusion_dic[pathway]:
-                exclu_system_ind = exclu_seed + ind * 24 + offset
+                exclu_system_ind = self.md_data[self.md_data.pathway == pathway][self.md_data.seed == exclu_seed]['system'].values[0]
                 system_exclusion.append(exclu_system_ind)
+
+
+        if feature_selection not in self.md_data.columns:
+            raise ValueError(
+                f'feature selection {feature_selection} not in'
+                f'{self.feature_file}\n'
+                f'Available features are {self.md_data.columns}')
+
+        self.feature_info = []
+        self.all_feed_feature_indice = []
+        self.get_feature_info(feature_selection, domain_exclusion)
+        print(f'added feature selection {feature_selection}, # of features: {len(self.feature_info[-1])}')
+
+        self.all_feature_selection = [feature_selection]
+        self.all_feature_file = [feature_file]
+        self.all_pathways = [pathways]
+        self.all_start = [start]
+        self.all_system_exclusion_dic = [system_exclusion_dic]
+        self.all_domain_exclusion = [domain_exclusion]
+        self.all_system_exclusion = [system_exclusion]
+        self.all_md_data = [self.md_data]
+
+        self.data_collected = False
+
+    def add_features(self,
+                     feature_selection,
+                     domain_exclusion=[]):
+
+        if self.data_collected:
+            raise ValueError('Feature already collected, create new instance')
+        self.all_feature_selection.append(feature_selection)
+        self.all_domain_exclusion.append(domain_exclusion)
+
+        if feature_selection not in self.md_data.columns:
+            raise ValueError(
+                f'feature selection {feature_selection} not in'
+                f'{self.feature_file}\n'
+                f'Available features are {self.md_data.columns[8:]}')
+
+        for ind, md_data in enumerate(self.all_md_data):
+            if feature_selection not in md_data.columns:
+                raise ValueError(
+                    f'feature selection {feature_selection} not in'
+                    f'{self.add_features[ind]}\n'
+                    f'Available features are {md_data.columns[8:]}')
+        self.get_feature_info(feature_selection, domain_exclusion)
+        print(f'added feature selection {feature_selection}, # of features: {len(self.feature_info[-1])}')
+
+    def add_trajectories(self,
+                         feature_file= 'msm_features_new.pickle',
+                         pathways = traj_notes,
+                         start=0,
+                         system_exclusion_dic = system_exclusion_dic,
+                         domain_exclusion= []):
+        if self.data_collected:
+            raise ValueError('Feature already collected, create new instance')
+
+        self.all_feature_file.append(feature_file)
+        self.all_pathways.append(pathways)
+        self.all_start.append(start)
+        self.all_system_exclusion_dic.append(system_exclusion_dic)
+        self.all_domain_exclusion.append(domain_exclusion)
+
+        md_data = pd.read_pickle(feature_file)
+#        md_data = md_data[md_data.frame % (3 * self.interval) == 0]
+
+        if self.dt != (md_data.traj_time[1] - md_data.traj_time[0]) / 1000 * self.interval:
+            raise ValueError('dt is not the same in new feature file ' + feature_file)
+
+        self.all_md_data.append(md_data)
+        
+        system_exclusion = []
+        for pathway in pathways:
+            for exclu_seed in system_exclusion_dic[pathway]:
+                exclu_system_ind = self.md_data[self.md_data.pathway == pathway][self.md_data.seed == exclu_seed]['system'].values[0]
+                system_exclusion.append(exclu_system_ind)
+        
+        self.all_system_exclusion.append(system_exclusion)
+        
+    def get_feature_info(self, feature_selection, domain_exclusion):
+        feature_info = np.load('./analysis_results/' + feature_selection + '_feature_info.npy', allow_pickle=True)
+        feed_feature_indice = []
+        for ind, feat in enumerate(feature_info):
+            if not any(exl_feat in feat for exl_feat in domain_exclusion):
+                feed_feature_indice.append(ind)
                 
-            if pathway == 'EPJPNU_BGT':
-                offset = 1
-    
-        self.extra_feature_file = extra_feature_file
-        self.extra_system_exclusion_dic = extra_system_exclusion_dic
-        
-        
-        if self.extra_feature_file != None:
-            extra_system_exclusion = []
-
-            self.md_data_extra = pd.read_pickle(self.extra_feature_file)
-            
-            for ind, pathway in enumerate(self.pathways):
-                for exclu_seed in self.extra_system_exclusion_dic[pathway]:
-                    exclu_system_ind = exclu_seed + ind * 24 + offset
-                    extra_system_exclusion.append(exclu_system_ind)
-
-                if pathway == 'EPJPNU_BGT':
-                    offset = 1
-        
-        self.system_exclusion = system_exclusion
-        self.extra_system_exclusion = extra_system_exclusion
-
-        self.domain_exclusion = domain_exclusion
-        
-        self.feature_info = np.load('./analysis_results/' + self.tica_file + '_feature_info.npy')
-        
-        self.feed_feature_indice = []
-        for ind, feat in enumerate(self.feature_info):
-            if not any(exl_feat in feat for exl_feat in self.domain_exclusion):
-                self.feed_feature_indice.append(ind)
-                
-        self.feature_info = self.feature_info[self.feed_feature_indice]
-        
+        self.feature_info.append(feature_info[feed_feature_indice])
+        self.all_feed_feature_indice.append(feed_feature_indice)        
         
     def start_tica_analysis(self):
         if (not os.path.isfile(self.filename  + 'tica.pyemma')) or self.updating:
             print('Start new TICA analysis')
-
             self.start_analysis()
 
         else:
@@ -229,127 +206,64 @@ class MSMInitializer(object):
             self.tica = pyemma.load(self.filename  + 'tica.pyemma')
             self.tica_output = pickle.load(open(self.filename  + 'output.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
-            
-            self.pathway_seed_start = [0]
-            old_pathway = self.pathways[0]
-            sys_index = 1
-            for sys, df in self.md_data[self.md_data.pathway.isin(self.pathways)].groupby(['system']):
-                if sys not in self.system_exclusion:
-                    if df.pathway.iloc[0] != old_pathway:
-                        self.pathway_seed_start.append(sys_index)
-                    old_pathway = df.pathway.iloc[0]
-                    sys_index += 5
+
+
+    def load_raw_data(self, feature_selection, feature_index, ensemble_index):
+        #TODO: feature dim 1 not work
+        md_data = self.all_md_data[ensemble_index]
+
+        raw_data = np.concatenate([np.load(location, allow_pickle=True)[:, self.all_feed_feature_indice[feature_index]]
+                        for location, df in md_data.groupby(feature_selection, sort=False)])
         
-    def start_analysis(self):
+        #TODO: make sure float16 is enough accuracy
+        raw_data = raw_data.astype(np.float32)
+        md_data = md_data[md_data.pathway.isin(self.all_pathways[ensemble_index])]
+        print('Feed n.frames: ' + str(md_data.shape[0]))
+
+        md_data = md_data[~md_data.system.isin(self.all_system_exclusion[ensemble_index])]
+
         feature_data = []
-
-        raw_data = np.concatenate([np.load(location, allow_pickle=True)
-                        for location, df in self.md_data.groupby(self.tica_file, sort=False)])
-        md_data = self.md_data[self.md_data.pathway.isin(self.pathways)]
-        
-        print('Feed n.frames:' + str(md_data.shape[0]))
-        
-        
-        self.pathway_seed_start = [0]
-        old_pathway = self.pathways[0]
-        sys_index = 1
         for sys, df in md_data.groupby(['system']):
-            if sys not in self.system_exclusion:
-                sys_data = raw_data[df.index[0] + self.start:df.index[-1]+1, self.feed_feature_indice]
-                total_shape = sys_data.shape[1]
-                per_shape = int(total_shape / 5)
-                
-                #  symmetrization of features
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                            0, axis=1).reshape(sys_data.shape[0],total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                            1, axis=1).reshape(sys_data.shape[0],total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                            2, axis=1).reshape(sys_data.shape[0],total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                            3, axis=1).reshape(sys_data.shape[0],total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                            4, axis=1).reshape(sys_data.shape[0],total_shape))
-                
-                if df.pathway.iloc[0] != old_pathway:
-                    self.pathway_seed_start.append(sys_index)
-                old_pathway = df.pathway.iloc[0]
-                sys_index += 5
+            sys_data = raw_data[df.index[0] + self.all_start[ensemble_index]:df.index[-1]+1][::self.interval]
+            total_shape = sys_data.shape[1]
+            per_shape = int(total_shape / 5)
             
-            
-        if self.extra_feature_file != None:
-            raw_data = np.concatenate([np.load(location, allow_pickle=True)
-                        for location, df in self.md_data_extra.groupby(self.tica_file, sort=False)])
-            md_data_extra = self.md_data_extra[self.md_data_extra.pathway.isin(self.pathways)]
-            print('Feed extra n.frames:' + str(md_data_extra.shape[0]))
-
-            self.pathway_seed_start_extra = [0]
-            old_pathway = self.pathways[0]
-            sys_index = 1
-            for sys, df in md_data_extra.groupby(['system']):
-                if sys not in self.extra_system_exclusion:
-                    sys_data = raw_data[df.index[0] + self.start:df.index[-1]+1, self.feed_feature_indice]
-                    total_shape = sys_data.shape[1]
-                    per_shape = int(total_shape / 5)
-
-                    #  symmetrization of features
-                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                                0, axis=1).reshape(sys_data.shape[0],total_shape))
-                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                                1, axis=1).reshape(sys_data.shape[0],total_shape))
-                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                                2, axis=1).reshape(sys_data.shape[0],total_shape))
-                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                                3, axis=1).reshape(sys_data.shape[0],total_shape))
-                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
-                                                4, axis=1).reshape(sys_data.shape[0],total_shape))
-
-                    if df.pathway.iloc[0] != old_pathway:
-                        self.pathway_seed_start_extra.append(sys_index)
-                    old_pathway = df.pathway.iloc[0]
-                    sys_index += 5
+            #  symmetrization of features
+            for permutation in range(5):
+                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0],5,per_shape),
+                    permutation, axis=1).reshape(sys_data.shape[0],total_shape))
                 
-
-        
-        self.tica = pyemma.coordinates.tica(feature_data, lag=self.lag)
-                
-        self.tica_output = self.tica.get_output()
-        self.tica_concatenated = np.concatenate(self.tica_output)
-        self.tica.save(self.filename + 'tica.pyemma', overwrite=True)
-        pickle.dump(self.tica_output, open(self.filename  + 'output.pickle', 'wb'))
-
-       
-        
-        del feature_data
         del raw_data
+        del sys_data
         gc.collect()
-        
-        
-    def clustering_with_dask(self, meaningful_tic, n_clusters, updating=False):
-        self.n_clusters = n_clusters
-        self.meaningful_tic = meaningful_tic
+        return feature_data
 
-        self.tica_output_filter = [np.asarray(output)[:,meaningful_tic] for output in self.tica_output]
-        
-        if not (os.path.isfile(self.cluster_filename + '_dask.pickle')) or updating:
-            print('Start new cluster analysis')
+    def gather_feature_matrix(self):
+        all_feature_data = []
+        for ensemble_index, ensemble in enumerate(self.all_md_data):
+            print('run for ' + self.all_feature_file[ensemble_index])
+            feature_ensemble = []
+            for feature_index, feature_selection in enumerate(self.all_feature_selection):
+                print('run for ' + feature_selection)
+                feature_ensemble.append(self.load_raw_data(feature_selection, feature_index, ensemble_index))
+                gc.collect()
+            concat_feature_data = []
+            for system in range(0, len(feature_ensemble[0])):
+                concat_feature_data.append(np.concatenate([feat_sys[system].astype(np.float32) for feat_sys in feature_ensemble], axis=1, dtype=np.float32))
+            all_feature_data.append(concat_feature_data)
 
-            # not implemented yet
-            self.d_cluster = dask.KMeans(n_clusters=self.n_clusters, init='k-means++', n_jobs=64)
-            self.d_cluster.fit(np.concatenate(self.tica_output_filter)[::10])
-            self.d_cluster_dtrajs = [self.d_cluster.predict(tica_out_traj).compute() for tica_out_traj in self.tica_output_filter]
-            
-            pickle.dump(self.d_cluster, open(self.cluster_filename + '_dask.pickle', 'wb'))
-            pickle.dump(self.d_cluster_dtrajs, open(self.cluster_filename + '_output_dask.pickle', 'wb'))
+            del feature_ensemble
+            del concat_feature_data
 
-        else:
-            print('Load old cluster results')
+            gc.collect()
+        self.data_collected = True
+        self.feature_trajectories = list(itertools.chain.from_iterable(all_feature_data))
+    #    self.feature_trajectories = list(np.concatenate(all_feature_data))
 
-            self.d_cluster = pickle.load(open(self.cluster_filename + '_dask.pickle', 'rb'))
-            self.d_cluster_dtrajs = pickle.load(open(self.cluster_filename + '_output_dask.pickle', 'rb'))
-               
-        self.d_dtrajs_concatenated = np.concatenate(self.d_cluster_dtrajs)
-        
+    def start_analysis(self):
+        raise NotImplementedError("Should be overridden by subclass")
+        if not self.data_collected:
+            self.gather_feature_matrix()       
         
     def clustering_with_pyemma(self, meaningful_tic, n_clusters, updating=False):
         self.n_clusters = n_clusters
@@ -395,7 +309,6 @@ class MSMInitializer(object):
         
         return self.msm
         
-
     def get_correlation(self, feature):
         md_data = pd.read_pickle(self.feature_file)
 
@@ -447,7 +360,7 @@ class MSMInitializer(object):
 
     @property
     def filename(self):
-        return './msmfile/' + self.tica_file + '_lag' + str(self.lag) + '_start' + str(self.start) + '_pathway' + ''.join([str(pathway_ind_dic[pathway]) for pathway in self.pathways]) + '_'
+        return './msmfile/' + self.feature_selection + '_lag' + str(self.lag) + '_start' + str(self.start) + '_pathway' + ''.join([str(pathway_ind_dic[pathway]) for pathway in self.pathways]) + '_'
     
     @property
     def cluster_filename(self):
