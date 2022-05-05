@@ -5,6 +5,7 @@ from .slurmjob import SLURMJob
 ip_address = socket.gethostbyname(socket.gethostname())
 port = 8786
 
+
 class PizDaintSLURMJob(SLURMJob):
     def _generate_job(self):
         self.jobscript = []
@@ -23,17 +24,23 @@ class PizDaintSLURMJob(SLURMJob):
         self.jobscript.append("module load cray-python\n")
         self.jobscript.append("module load jupyter-utils\n")
         self.jobscript.append("module load PyExtensions\n")
-        self.jobscript.append("module load jupyterlab/2.0.2-CrayGNU-20.11-batchspawner-cuda\n")
+        self.jobscript.append(
+            "module load jupyterlab/2.0.2-CrayGNU-20.11-batchspawner-cuda\n")
         self.jobscript.append("\n")
         self.jobscript.append("source /users/yzhuang/myvenv/bin/activate\n")
-        self.jobscript.append("srun /users/yzhuang/myvenv/bin/dask-worker " + self.ip_address + ":" + self.port + " --nthreads 1 --nprocs 2 --death-timeout 60\n")
-        
+        self.jobscript.append(
+            "srun /users/yzhuang/myvenv/bin/dask-worker " +
+            self.ip_address +
+            ":" +
+            self.port +
+            " --nthreads 1 --nprocs 2 --death-timeout 60\n")
+
     def submit_job(self):
         with open('./dask-worker-space/submit.sh', "w") as f:
-            f.writelines(self.jobscript)    
+            f.writelines(self.jobscript)
         proc = subprocess.Popen(
             ['sbatch', 'submit.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    cwd='/users/yzhuang/jupyterground/dask-worker-space'
+            cwd='/users/yzhuang/jupyterground/dask-worker-space'
         )
 
         out, err = proc.communicate()
@@ -48,12 +55,11 @@ class PizDaintSLURMJob(SLURMJob):
             )
 
         self.jobid = out.split(' ')[-1][:-1]
-    
-    
+
+
 def add_workers(n_nodes):
     slurm_job = SLURMJob(n_nodes=n_nodes,
                          ip_address=ip_address,
                          port=port)
     slurm_job.submit_job()
     return slurm_job
-    

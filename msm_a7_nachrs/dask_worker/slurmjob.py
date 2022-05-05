@@ -2,6 +2,7 @@ import socket
 import subprocess
 from datetime import datetime
 
+
 class SLURMJob(object):
     def __init__(self, n_nodes, ip_address, port):
         self.n_nodes = n_nodes
@@ -9,15 +10,15 @@ class SLURMJob(object):
         self.port = str(port)
 
         self._generate_job()
-    
+
     def _generate_job(self):
         # specfic slurm script in different cluster
         raise NotImplementedError('Only for inheritence')
-        
+
     def submit_job(self):
         # specfic slurm script in different cluster
         raise NotImplementedError('Only for inheritence')
-    
+
     def check_status(self):
         proc = subprocess.Popen(['scontrol', 'show', 'jobid', '-dd', self.jobid],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -32,10 +33,11 @@ class SLURMJob(object):
             )
         self.out = out
         self.err = err
-        self.runtime = out[out.find('RunTime') + 8: out.find('RunTime') + 16 ]
-        self.runtime = datetime.strptime(self.runtime,'%H:%M:%S')  - datetime(1900, 1, 1)
+        self.runtime = out[out.find('RunTime') + 8: out.find('RunTime') + 16]
+        self.runtime = datetime.strptime(
+            self.runtime, '%H:%M:%S') - datetime(1900, 1, 1)
         print(self.runtime)
-    
+
     def cancel_worker(self):
         proc = subprocess.Popen(
             ['scancel', self.jobid], stdout=subprocess.PIPE, stderr=subprocess.PIPE)

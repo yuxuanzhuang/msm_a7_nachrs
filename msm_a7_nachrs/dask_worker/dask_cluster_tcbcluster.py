@@ -10,35 +10,36 @@ dask_worker_dir = '/'.join(dask.__file__.split('/')[:-5]) + '/bin/dask-worker '
 try:
     ni.ifaddresses('enp24s0')
     ip_address = ni.ifaddresses('enp24s0')[ni.AF_INET][0]['addr']
-except:
+except BaseException:
     pass
 try:
     ni.ifaddresses('enp5s0')
     ip_address = ni.ifaddresses('enp5s0')[ni.AF_INET][0]['addr']
-except:
+except BaseException:
     pass
 try:
     ni.ifaddresses('enp4s0')
     ip_address = ni.ifaddresses('enp4s0')[ni.AF_INET][0]['addr']
-except:
+except BaseException:
     pass
 try:
     ni.ifaddresses('enp3s0')
     ip_address = ni.ifaddresses('enp3s0')[ni.AF_INET][0]['addr']
-except:
+except BaseException:
     pass
 try:
     ni.ifaddresses('enp2s0f0')
     ip_address = ni.ifaddresses('enp2s0f0')[ni.AF_INET][0]['addr']
-except:
+except BaseException:
     pass
 try:
     ni.ifaddresses('ens6')
     ip_address = ni.ifaddresses('ens6')[ni.AF_INET][0]['addr']
-except:
+except BaseException:
     pass
 
 port = 8786
+
 
 class SLURMJob(SLURMJob):
     def _generate_job(self):
@@ -55,14 +56,20 @@ class SLURMJob(SLURMJob):
         self.jobscript.append("#SBATCH -t 24:00:00\n")
         self.jobscript.append("#SBATCH -C cpu\n")
         self.jobscript.append("\n")
-        self.jobscript.append("srun " + dask_worker_dir + self.ip_address + ":" + self.port + " --memory-limit=auto --nthreads 2 --nprocs 1 --death-timeout 60\n")
-        
+        self.jobscript.append(
+            "srun " +
+            dask_worker_dir +
+            self.ip_address +
+            ":" +
+            self.port +
+            " --memory-limit=auto --nthreads 2 --nprocs 1 --death-timeout 60\n")
+
     def submit_job(self):
         with open('/nethome/yzhuang/dask-worker-space/submit.sh', "w") as f:
-            f.writelines(self.jobscript)    
+            f.writelines(self.jobscript)
         proc = subprocess.Popen(
             ['sbatch', 'submit.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    cwd='/nethome/yzhuang/dask-worker-space'
+            cwd='/nethome/yzhuang/dask-worker-space'
         )
 
         out, err = proc.communicate()
@@ -77,7 +84,7 @@ class SLURMJob(SLURMJob):
             )
 
         self.jobid = out.split(' ')[-1][:-1]
-    
+
 
 def add_workers(n_nodes, ip_address=ip_address, port=port):
     slurm_job = SLURMJob(n_nodes=n_nodes,
