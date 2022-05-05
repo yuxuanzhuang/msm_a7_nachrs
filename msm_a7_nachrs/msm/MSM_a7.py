@@ -82,6 +82,7 @@ class MSMInitializer(object):
                  multimer=5,
                  symmetrize=True,
                  updating=True,
+                 dumping=True,
                  lag=100,
                  start=0,
                  pathways = traj_notes,
@@ -89,11 +90,11 @@ class MSMInitializer(object):
                  domain_exclusion = [],
                  feature_file = 'msm_features.pickle',
                  interval=1):
-
         # lag for # of frames
         self.lag = lag
         self.feature_selection = feature_selection
         self.start = start
+        self.dumping = dumping
         self.multimer = multimer
         self.symmetrize = symmetrize
 
@@ -269,8 +270,9 @@ class MSMInitializer(object):
 
     def dump_feature_trajectories(self):
         if self.data_collected:
-            for ind, feature_matrix in enumerate(self.feature_trajectories):
-                np.save(self.filename + f'feature_traj_{ind}.npy', feature_matrix)
+            if self.dumping:
+                for ind, feature_matrix in enumerate(self.feature_trajectories):
+                    np.save(self.filename + f'feature_traj_{ind}.npy', feature_matrix)
             print('Feature matrix saved')
             self.data_collected = False
 
@@ -305,8 +307,9 @@ class MSMInitializer(object):
                                                              stride=100)
             self.cluster_dtrajs = self.cluster.dtrajs
             
-            pickle.dump(self.cluster, open(self.cluster_filename + '_pyemma.pickle', 'wb'))
-            pickle.dump(self.cluster_dtrajs, open(self.cluster_filename + '_output_pyemma.pickle', 'wb'))
+            if self.dumping:
+                pickle.dump(self.cluster, open(self.cluster_filename + '_pyemma.pickle', 'wb'))
+                pickle.dump(self.cluster_dtrajs, open(self.cluster_filename + '_output_pyemma.pickle', 'wb'))
 
         else:
             print('Load old cluster results')

@@ -57,17 +57,22 @@ class VAMPNETInitializer(MSMInitializer):
             print('Start new VAMPNET analysis')
             if not self.data_collected:
                 self.gather_feature_matrix()
+            print('Finished gathering feature matrix')
 
-    #        self.dataset = MultimerTrajectoriesDataset.from_numpy(self.lag, self.multimer, self.feature_trajectories)
-            self.dataset = TrajectoriesDataset.from_numpy(lagtime=self.lag,
-                                                          data=self.feature_trajectories)
+            if not self.symmetrize:
+                self.dataset = MultimerTrajectoriesDataset.from_numpy(self.lag, self.multimer, self.feature_trajectories)
+            else:
+                self.dataset = TrajectoriesDataset.from_numpy(lagtime=self.lag,
+                                                              data=self.feature_trajectories)
 
+            if self.dumping:
+                self.dump_feature_trajectories()
 
-            with open(self.filename + 'vampnet_init.pickle', 'wb') as f:
-                pickle.dump(self, f)
+#                with open(self.filename + 'vampnet_init.pickle', 'wb') as f:
+#                    pickle.dump(self, f)
         else:
             print('Load old VAMPNET results')
-            self = pickle.load(open(self.filename + 'vampnet_init.pickle', 'rb'))
+#            self = pickle.load(open(self.filename + 'vampnet_init.pickle', 'rb'))
 
         
 class MultimerNet(nn.Module):

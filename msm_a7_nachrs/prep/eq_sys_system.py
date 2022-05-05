@@ -156,11 +156,20 @@ if __name__ == '__main__':
     system = args.system
     seeds = os.listdir(f'../SEEDS/{system}/')
 
+    seed_dirs = []
+    for seed in seeds:
+        # remove already finished seeds
+        if os.path.isfile(f'../EQUILIBRATION/{system}/{seed}/ca.gro'):
+            print(f'{system}/{seed}/ca exists')
+        else:
+            seed_dirs.append(seed)
+
+
     # more than enough gpu_ids to iterate over all seeds
     # four GPU in each node
     gpu_ids = [0, 1, 2, 3] * 20
     run_command_para = partial(run_command,
                             system=system)
-    pool.map(run_command_para, zip(seeds, gpu_ids), chunksize=1)
+    pool.map(run_command_para, zip(seed_dirs, gpu_ids), chunksize=1)
     print('finished')
 
