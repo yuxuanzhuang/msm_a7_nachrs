@@ -1,3 +1,4 @@
+from genericpath import exists
 from MDAnalysis.analysis.rms import RMSD
 from MDAnalysis.analysis.distances import distance_array
 from MDAnalysis.lib.distances import calc_bonds
@@ -21,6 +22,7 @@ import pickle
 import gc
 import logging
 import warnings
+import shutil
 warnings.filterwarnings('ignore')
 logging.basicConfig(filename="logs.log", level=logging.INFO)
 
@@ -31,7 +33,7 @@ aligner_ref = align.AlignTraj(
 ).run()
 
 pwd = os.getcwd()
-
+timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 class MDDataFrame(object):
     def __init__(self):
@@ -137,7 +139,7 @@ class AnalysisResult(dict):
         self.ref_info = {}
         self.u_ref = u_ref
 
-        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.timestamp = timestamp
 
         os.makedirs(self.filename, exist_ok=True)
 
@@ -208,6 +210,42 @@ class AnalysisResult(dict):
     def append_to_dataframe(self, dataframe):
         for item in self.keys():
             dataframe[item] = self[item].iloc[:, 1]
+
+    def save(self, filename):
+        if not os.path.exists(f'{filename}.pickle'):
+            with open(f'{filename}.pickle', 'wb') as f:
+                pickle.dump(self, f)
+        else:
+            md_data_old = pickle.load(open(f'{filename}.pickle', 'rb'))
+
+            if set(md_data_old.universe) != set(self.dataframe.universe):
+                print('New seeds added')
+                with open(f'{filename}.pickle', 'wb') as f:
+                    pickle.dump(self, f)
+            elif md_data_old.shape[0] != self.dataframe.shape[0]:
+                print('N.frame changed')
+
+                old_cols = md_data_old.columns
+                new_cols = self.md_data.columns
+                print('New: ' + np.setdiff1d(new_cols, old_cols))
+                
+                extra_cols = np.setdiff1d(new_cols, old_cols)
+                
+                for extra_col in extra_cols:
+                    md_data_old[extra_col] = self.md_data[extra_col]
+                    
+                print('Common: ' + np.intersect1d(new_cols, old_cols))
+                common_cols = np.intersect1d(new_cols, old_cols)
+                
+                for common_col in common_cols:
+                    md_data_old[common_col] = self.md_data[common_col]
+                
+                shutil.copyfile(f'{filename}.pickle', filename + '_' + timestamp + '.pickle')
+                md_data_old.to_pickle(f'{filename}.pickle')
+            else:
+                print('No changes')
+                with open(f'{filename}.pickle', 'wb') as f:
+                    pickle.dump(self, f)
 
     @property
     def filename(self, timestamp=None):
