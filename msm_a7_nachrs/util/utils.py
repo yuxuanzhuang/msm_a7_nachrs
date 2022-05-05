@@ -1,40 +1,44 @@
 '''
 Annotations for nicotinic receptor alpha-7 project
 '''
+import numpy as np
+import dask
+import pickle
+import re
+import itertools
 import os
 pwd = os.getcwd()
 
-import itertools
 
 #  used for mdtraj
-subunit_dic = {0:0,1:1,2:2,3:3,4:4,5:0,-1:4}
+subunit_dic = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 0, -1: 4}
 
 #  used for MDAnalysis
-subunit_dic_mda = {0:'A',1:'B',2:'C',3:'D',4:'E',5:'A'}
+subunit_dic_mda = {0: 'A', 1: 'B', 2: 'C', 3: 'D', 4: 'E', 5: 'A'}
 
-subunit_type = {0:'a7',1:'a7',2:'a7',3:'a7',4:'a7',5:'a7'}
+subunit_type = {0: 'a7', 1: 'a7', 2: 'a7', 3: 'a7', 4: 'a7', 5: 'a7'}
 
 #  pore lining residues
 pore_annotation = {
-    'a7':{
-            '-1': '(resid 237 and resname GLU)',
-            '2': '(resid 240 and resname SER)',
-            '6': '(resid 244 and resname THR)',
-            '9':  '(resid 247 and resname LEU)',
-            '13': '(resid 251 and resname VAL)',
-            '16': '(resid 254 and resname LEU)',
-            '20': '(resid 258 and resname GLU)'
+    'a7': {
+        '-1': '(resid 237 and resname GLU)',
+        '2': '(resid 240 and resname SER)',
+        '6': '(resid 244 and resname THR)',
+        '9': '(resid 247 and resname LEU)',
+        '13': '(resid 251 and resname VAL)',
+        '16': '(resid 254 and resname LEU)',
+        '20': '(resid 258 and resname GLU)'
     }
 }
 secondary_structure_annotation = {
-    'a7':{
+    'a7': {
         'ECD': '(resSeq 10 to 206)',
         'TMD': '(resSeq 207 to 401)'
     }
-    }
+}
 
 domain_structure_annotation = {
-    'a7':{
+    'a7': {
         'M1': '(resSeq 207 to 232)',
         'M2': '(resSeq 235 to 261)',
         'M3': '(resSeq 267 to 298)',
@@ -48,23 +52,23 @@ domain_structure_annotation = {
 }
 
 traj_notes = [
-              'BGT_EPJPNU',
-              'BGT_EPJ',
-              'EPJPNU_BGT',
-              'EPJPNU_EPJ',
-              'EPJ_BGT',
-              'EPJ_EPJPNU'
-              ]
+    'BGT_EPJPNU',
+    'BGT_EPJ',
+    'EPJPNU_BGT',
+    'EPJPNU_EPJ',
+    'EPJ_BGT',
+    'EPJ_EPJPNU'
+]
 
 production_dic = {'traj_note': traj_notes,
-                 'load_location': ["".join(i) for i in itertools.product([pwd + '/../PRODUCTION/'], traj_notes)],
-                 'save_location': [pwd + '/../ANALYSIS/TRAJECTORY/'] * len(traj_notes),
-                 'skip': [1] * len(traj_notes)}
+                  'load_location': ["".join(i) for i in itertools.product([pwd + '/../PRODUCTION/'], traj_notes)],
+                  'save_location': [pwd + '/../ANALYSIS/TRAJECTORY/'] * len(traj_notes),
+                  'skip': [1] * len(traj_notes)}
 
 production_dic_2 = {'traj_note': traj_notes,
-                 'load_location': ["".join(i) for i in itertools.product([pwd + '/../PRODUCTION_new/'], traj_notes)],
-                 'save_location': [pwd + '/../ANALYSIS/TRAJECTORY_new/'] * len(traj_notes),
-                 'skip': [1] * len(traj_notes)}
+                    'load_location': ["".join(i) for i in itertools.product([pwd + '/../PRODUCTION_new/'], traj_notes)],
+                    'save_location': [pwd + '/../ANALYSIS/TRAJECTORY_new/'] * len(traj_notes),
+                    'skip': [1] * len(traj_notes)}
 
 equilibration_dic = {'traj_note': traj_notes,
                      'load_location': ["".join(i) for i in itertools.product([pwd + '/../EQUILIBRATION/'], traj_notes)],
@@ -72,14 +76,15 @@ equilibration_dic = {'traj_note': traj_notes,
                      'skip': [1] * len(traj_notes)}
 
 climber_dic = {'traj_note': ['BGT_EPJPNU', 'BGT_EPJ', 'EPJ_EPJPNU', 'EPJ_BGT', 'EPJPNU_BGT', 'EPJPNU_EPJ'],
-              'load_location': ["".join(i) for i in itertools.product([pwd + '/../Climber/'], ['BGT_EPJPNU', 'BGT_EPJ', 'EPJ_EPJPNU', 'EPJ_BGT', 'EPJPNU_BGT', 'EPJPNU_EPJ'])]}
+               'load_location': ["".join(i) for i in itertools.product([pwd + '/../Climber/'], ['BGT_EPJPNU', 'BGT_EPJ', 'EPJ_EPJPNU', 'EPJ_BGT', 'EPJPNU_BGT', 'EPJPNU_EPJ'])]}
 
 
 ## Functions ##
-import re
+
 
 def atoi(text):
     return int(text) if text.isdigit() else text
+
 
 def natural_keys(text):
     '''
@@ -87,12 +92,12 @@ def natural_keys(text):
     http://nedbatchelder.com/blog/200712/human_sorting.html
     (See Toothy's implementation in the comments)
     '''
-    return [ atoi(c) for c in re.split(r'(\d+)', text) ]
+    return [atoi(c) for c in re.split(r'(\d+)', text)]
+
 
 ## Parallel Analysis ##
-import pickle
-import dask
-import numpy as np
+
+
 def send_to_dask(job_func=None, job_loop=None, mda_analysis=None, **kwargs):
     if mda_analysis is None:
         if job_func is not None:
@@ -101,7 +106,9 @@ def send_to_dask(job_func=None, job_loop=None, mda_analysis=None, **kwargs):
 
             for ind, job in enumerate(job_loop):
 
-                job_list.append(dask.delayed(job_func)(job, **kwargs, system=ind))
+                job_list.append(
+                    dask.delayed(job_func)(
+                        job, **kwargs, system=ind))
             print("job appended")
             result = dask.compute(job_list)
             print("job finished")

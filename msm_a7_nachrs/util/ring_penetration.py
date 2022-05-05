@@ -8,8 +8,9 @@ import numpy as np
 import MDAnalysis.transformations as trans
 import MDAnalysis as mda
 
-_s = re.compile('\s+')
-_p = re.compile('(\d+)\s+(\d+)')
+_s = re.compile('\\s+')
+_p = re.compile('(\\d+)\\s+(\\d+)')
+
 
 def lsqp(atoms):
     com = atoms.mean(axis=0)
@@ -18,17 +19,18 @@ def lsqp(atoms):
     axes = np.zeros((len(atoms), 3))
     for i in range(len(atoms)):
         p1 = atoms[i]
-        if i == len(atoms)-1:
+        if i == len(atoms) - 1:
             p2 = atoms[0]
         else:
-            p2 = atoms[i+1]
+            p2 = atoms[i + 1]
         a = np.cross(p1, p2)
         axes += a
     u, d, v = np.linalg.svd(axes)
     i = 0
     d = -np.dot(v[i], com)
-    n = -np.array((v[i,0], v[i,1], d))/v[i,2]
+    n = -np.array((v[i, 0], v[i, 1], d)) / v[i, 2]
     return v[i], com, n
+
 
 def intriangle(triangle, axis, u, p):
     # http://www.softsurfer.com/Archive/algorithm_0105/algorithm_0105.htm
@@ -36,11 +38,14 @@ def intriangle(triangle, axis, u, p):
     w0 = p - p1
     a = -np.dot(axis, w0)
     b = np.dot(axis, u)
-    if (abs(b) < 0.01): return False
+    if (abs(b) < 0.01):
+        return False
 
     r = a / b
-    if r < 0.0: return False
-    if r > 1.0: return False
+    if r < 0.0:
+        return False
+    if r > 1.0:
+        return False
 
     I = p + u * r
 
@@ -54,18 +59,21 @@ def intriangle(triangle, axis, u, p):
     wv = np.dot(w, v)
     D = uv * uv - uu * vv
 
-    s = (uv * wv - vv * wu)/D
-    if (s < 0 or s > 1): return False
-    t = (uv * wu - uu * wv)/D
-    if (t < 0 or (s+t) > 1): return False
+    s = (uv * wv - vv * wu) / D
+    if (s < 0 or s > 1):
+        return False
+    t = (uv * wu - uu * wv) / D
+    if (t < 0 or (s + t) > 1):
+        return False
     return True
+
 
 def build_topology(universe, selection):
     g = nx.Graph()
 
     #  Atoms
     natom = universe.atoms.n_atoms
-    for atom in universe.select_atoms(selection).atoms:  #  might be buggy
+    for atom in universe.select_atoms(selection).atoms:  # might be buggy
         g.add_node(atom.index + 1, **{'segid': atom.segid,
                                       'resname': atom.resname,
                                       'name': atom.name,
@@ -77,6 +85,7 @@ def build_topology(universe, selection):
             g.add_edge(num1, num2)
     return g
 
+
 def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
     # ring penetration test
     # 1. find rings
@@ -86,41 +95,44 @@ def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
     # 5. determine the point of intersection is enclosed in the ring
     #
     from networkx.algorithms.components import connected_components
-    molecules =  (top.subgraph(c) for c in connected_components(top))
+    molecules = (top.subgraph(c) for c in connected_components(top))
 
     allatoms = np.array([coord[num] for num in top.nodes()])
     atoms_map = np.array([num for num in top.nodes()])
     natoms = len(allatoms)
     if pbc:
         atoms_map_reverse = {}
-        for i,num in enumerate(top.nodes()):
+        for i, num in enumerate(top.nodes()):
             atoms_map_reverse[num] = i
 
         a = float(pbc[0])
         b = float(pbc[1])
         n = len(allatoms)
         if xtl == 'rect':
-            allatoms = np.tile(allatoms, (9,1))
-            op = ((a,0),(a,b),(0,b),(-a,b),(-a,0),(-a,-b),(0,-b),(a,-b))
+            allatoms = np.tile(allatoms, (9, 1))
+            op = ((a, 0), (a, b), (0, b), (-a, b),
+                  (-a, 0), (-a, -b), (0, -b), (a, -b))
             for i in range(8):
-                x,y = op[i]
-                allatoms[n*(i+1):n*(i+2),0] += x
-                allatoms[n*(i+1):n*(i+2),1] += y
+                x, y = op[i]
+                allatoms[n * (i + 1):n * (i + 2), 0] += x
+                allatoms[n * (i + 1):n * (i + 2), 1] += y
             atoms_map = np.tile(atoms_map, 9)
-        if xtl =='hexa':
-            allatoms = np.tile(allatoms, (7,1))
-            rot = lambda theta: np.matrix(((np.cos(np.radians(theta)), -np.sin(np.radians(theta))),
-                                           (np.sin(np.radians(theta)),  np.cos(np.radians(theta)))))
+        if xtl == 'hexa':
+            allatoms = np.tile(allatoms, (7, 1))
+
+            def rot(theta): return np.matrix(((np.cos(np.radians(theta)), -np.sin(np.radians(theta))),
+                                              (np.sin(np.radians(theta)), np.cos(np.radians(theta)))))
             op = (rot(15), rot(75), rot(135), rot(195), rot(255), rot(315))
             d = np.array((a, 0))
             for i in range(6):
                 xy = np.dot(d, op[i])
-                allatoms[n*(i+1):n*(i+2),:2] = allatoms[n*(i+1):n*(i+2),:2] + xy
+                allatoms[n * (i + 1):n * (i + 2),
+                         :2] = allatoms[n * (i + 1):n * (i + 2), :2] + xy
             atoms_map = np.tile(atoms_map, 7)
 
     # print out image atoms
     #fp = open('image.pdb', 'w')
-    #for i,atom in enumerate(allatoms):
+    # for i,atom in enumerate(allatoms):
     #    x, y, z = atom
     #    fp.write("HETATM%5d  %-3s %3s  %4d    %8.3f%8.3f%8.3f  0.00  0.00      \n" % (i, 'C', 'DUM', i, x, y, z))
 
@@ -129,26 +141,32 @@ def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
 
     for m in molecules:
         cycles = nx.cycle_basis(m)
-        if not cycles: continue
+        if not cycles:
+            continue
         for cycle in cycles:
             flag = False
             atoms = np.array([coord[num] for num in cycle])
-            if len(set([top.nodes[num]['resid'] for num in cycle])) > 1: continue
+            if len(set([top.nodes[num]['resid'] for num in cycle])) > 1:
+                continue
             if verbose:
                 num = cycle[0]
-                print('found ring:', top.nodes[num]['segid'], top.nodes[num]['resid'], top.nodes[num]['resname'])
+                print(
+                    'found ring:',
+                    top.nodes[num]['segid'],
+                    top.nodes[num]['resid'],
+                    top.nodes[num]['resname'])
 
             # build least square fit plane
             axis, com, n = lsqp(atoms)
 
             # project atoms to the least square fit plane
-            for i,atom in enumerate(atoms):
-                w = np.dot(axis, atom-com)*axis + com
+            for i, atom in enumerate(atoms):
+                w = np.dot(axis, atom - com) * axis + com
                 atoms[i] = com + (atom - w)
 
             maxd = np.max(np.sqrt(np.sum(np.square(atoms - com), axis=1)))
 
-            d = np.sqrt(np.sum(np.square(allatoms-com), axis=1))
+            d = np.sqrt(np.sum(np.square(allatoms - com), axis=1))
             nums = np.squeeze(np.argwhere(d < 3))
 
             # find two bonded atoms that are at the opposite side of the plane
@@ -156,26 +174,31 @@ def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
                 num1 = atoms_map[num]
 
                 for num2 in top[num1]:
-                    if num1 in cycle or num2 in cycle: continue
+                    if num1 in cycle or num2 in cycle:
+                        continue
                     if num > natoms:
                         # image atoms
                         offset = int(num / natoms)
                         coord1 = allatoms[num]
-                        coord2 = allatoms[atoms_map_reverse[num2] + offset * natoms]
+                        coord2 = allatoms[atoms_map_reverse[num2] +
+                                          offset * natoms]
                     else:
                         coord1 = coord[num1]
                         coord2 = coord[num2]
 
                     v1 = np.dot(coord1 - com, axis)
                     v2 = np.dot(coord2 - com, axis)
-                    if v1 * v2 > 0: continue
+                    if v1 * v2 > 0:
+                        continue
 
                     # point of intersection of the least square fit plane
-                    s = -np.dot(axis, coord1-com)/np.dot(axis, coord2-coord1)
-                    p = coord1 + s*(coord2-coord1)
+                    s = -np.dot(axis, coord1 - com) / \
+                        np.dot(axis, coord2 - coord1)
+                    p = coord1 + s * (coord2 - coord1)
 
-                    d = np.sqrt(np.sum(np.square(p-com)))
-                    if d > maxd: continue
+                    d = np.sqrt(np.sum(np.square(p - com)))
+                    if d > maxd:
+                        continue
                     if verbose:
                         print('found potentially pentrarting bond:',
                               top.nodes[num1]['segid'],
@@ -187,11 +210,14 @@ def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
                     d = 0
                     for i in range(0, len(atoms)):
                         p1 = atoms[i] - p
-                        try: p2 = atoms[i+1] - p
-                        except: p2 = atoms[0] - p
-                        d += np.arccos(np.dot(p1, p2)/np.linalg.norm(p1)/np.linalg.norm(p2))
+                        try:
+                            p2 = atoms[i + 1] - p
+                        except BaseException:
+                            p2 = atoms[0] - p
+                        d += np.arccos(np.dot(p1, p2) /
+                                       np.linalg.norm(p1) / np.linalg.norm(p2))
 
-                    wn = d/2/np.pi
+                    wn = d / 2 / np.pi
                     if wn > 0.9 and wn < 1.1:
                         # we have a case
                         pen_pairs.append((num1, num2))
@@ -199,10 +225,10 @@ def check_ring_penetration(top, coord, pbc=[], xtl='rect', verbose=0):
                         flag = True
                         break
 
-                if flag: break
+                if flag:
+                    break
 
     return pen_pairs, pen_cycles
-
 
 
 def check_universe_ring_penetration(universe,
@@ -225,16 +251,16 @@ def check_universe_ring_penetration(universe,
 
             for i, cycle in enumerate(rings):
                 output_text.append('- %s %s %s %s %s | %s %s %s %s %s' % (
-                top.nodes[pairs[i][0]]['segid'],
-                top.nodes[pairs[i][0]]['index'],
-                top.nodes[pairs[i][0]]['resid'],
-                top.nodes[pairs[i][0]]['resname'],
-                ' '.join([top.nodes[num]['name'] for num in pairs[i]]),
-                top.nodes[cycle[0]]['segid'],
-                top.nodes[cycle[0]]['index'],
-                top.nodes[cycle[0]]['resid'],
-                top.nodes[cycle[0]]['resname'],
-                ' '.join([top.nodes[num]['name'] for num in cycle])))
+                    top.nodes[pairs[i][0]]['segid'],
+                    top.nodes[pairs[i][0]]['index'],
+                    top.nodes[pairs[i][0]]['resid'],
+                    top.nodes[pairs[i][0]]['resname'],
+                    ' '.join([top.nodes[num]['name'] for num in pairs[i]]),
+                    top.nodes[cycle[0]]['segid'],
+                    top.nodes[cycle[0]]['index'],
+                    top.nodes[cycle[0]]['resid'],
+                    top.nodes[cycle[0]]['resname'],
+                    ' '.join([top.nodes[num]['name'] for num in cycle])))
     return output_text
 
 
@@ -267,9 +293,11 @@ def main():
         universe = mda.Universe(args.topology, args.trajectory)
 
     # unwrap/make_whole all selected atoms.
-    universe.trajectory.add_transformations(trans.unwrap(universe.select_atoms(args.selection)))
+    universe.trajectory.add_transformations(
+        trans.unwrap(universe.select_atoms(args.selection)))
 
-    output_text = check_universe_ring_penetration(universe, args.selection, verbose=args.verbose)
+    output_text = check_universe_ring_penetration(
+        universe, args.selection, verbose=args.verbose)
 
     if args.output:
         fp = open(args.output, 'w')
@@ -281,6 +309,7 @@ def main():
             print(line)
         if len(output_text) == 1:
             print('No pentration found')
+
 
 if __name__ == '__main__':
     sys.exit(main())

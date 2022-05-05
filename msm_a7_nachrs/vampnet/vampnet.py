@@ -28,6 +28,7 @@ class MultimerTrajectoriesDataset(TrajectoriesDataset):
     A dataset for multimer trajectories.
     Warning: The features in this dataset should be n-fold symmetric.
     """
+
     def __init__(self, multimer: int, data: List[TrajectoryDataset]):
         self.multimer = multimer
         super().__init__(data)
@@ -35,7 +36,8 @@ class MultimerTrajectoriesDataset(TrajectoriesDataset):
     @staticmethod
     def from_numpy(lagtime, multimer, data: List[np.ndarray]):
         assert isinstance(data, list)
-        assert len(data) > 0 and all(data[0].shape[1:] == x.shape[1:] for x in data), "Shape mismatch!"
+        assert len(data) > 0 and all(
+            data[0].shape[1:] == x.shape[1:] for x in data), "Shape mismatch!"
 
         data_new = []
         total_shape = data[0].shape[1]
@@ -43,24 +45,26 @@ class MultimerTrajectoriesDataset(TrajectoriesDataset):
 
         for i in range(multimer):
             data_new.extend(
-                [np.roll(traj.reshape(traj.shape[0],multimer, per_shape),
-                                                i, axis=1).reshape(traj.shape[0],total_shape)
-                for traj in data])
-        return MultimerTrajectoriesDataset(multimer, [TrajectoryDataset(lagtime, traj) for traj in data_new])
+                [np.roll(traj.reshape(traj.shape[0], multimer, per_shape),
+                         i, axis=1).reshape(traj.shape[0], total_shape)
+                 for traj in data])
+        return MultimerTrajectoriesDataset(
+            multimer, [TrajectoryDataset(lagtime, traj) for traj in data_new])
 
 
 class VAMPNETInitializer(MSMInitializer):
-    prefix="vampnet"
+    prefix = "vampnet"
 
     def start_analysis(self):
-        if (not os.path.isfile(self.filename  + 'vampnet.pyemma')) or self.updating:
+        if (not os.path.isfile(self.filename + 'vampnet.pyemma')) or self.updating:
             print('Start new VAMPNET analysis')
             if not self.data_collected:
                 self.gather_feature_matrix()
             print('Finished gathering feature matrix')
 
             if not self.symmetrize:
-                self.dataset = MultimerTrajectoriesDataset.from_numpy(self.lag, self.multimer, self.feature_trajectories)
+                self.dataset = MultimerTrajectoriesDataset.from_numpy(
+                    self.lag, self.multimer, self.feature_trajectories)
             else:
                 self.dataset = TrajectoriesDataset.from_numpy(lagtime=self.lag,
                                                               data=self.feature_trajectories)
@@ -74,24 +78,24 @@ class VAMPNETInitializer(MSMInitializer):
             print('Load old VAMPNET results')
 #            self = pickle.load(open(self.filename + 'vampnet_init.pickle', 'rb'))
 
-        
+
 class MultimerNet(nn.Module):
     def __init__(self, data_shape, multimer, n_states):
         super().__init__()
         self.data_shape = data_shape
         self.multimer = multimer
         self.n_states = n_states
-        
+
         self.n_feat_per_sub = self.data_shape // self.multimer
         self._construct_architecture()
 
     def _construct_architecture(self):
         self.batchnorm1d = nn.BatchNorm1d(self.n_feat_per_sub)
-        
+
         # Fully connected layers into monomer part
         self.fc1 = nn.Linear(self.n_feat_per_sub, 200)
         self.elu1 = nn.ELU()
-        
+
         self.fc2 = nn.Linear(200, 100)
         self.elu2 = nn.ELU()
 
@@ -100,7 +104,7 @@ class MultimerNet(nn.Module):
 
         self.fc4 = nn.Linear(50, 20)
         self.elu4 = nn.ELU()
-        
+
         self.fc5 = nn.Linear(20, self.n_states)
         self.softmax = nn.Softmax(dim=1)
 
@@ -116,15 +120,16 @@ class MultimerNet(nn.Module):
 
     # x represents our data
     def forward(self, x):
- #       x = self.batchnorm1d(x)
-        
+     #       x = self.batchnorm1d(x)
+
         batch_size = x.shape[0]
-        
+
         n_feat_per_sub = int(self.data_shape / self.multimer)
         x_splits = x.reshape(batch_size, self.multimer, self.n_feat_per_sub)
         output = []
-        
-        x_stack = torch.permute(x_splits, (1,0,2)).reshape(batch_size * self.multimer, self.n_feat_per_sub)
+
+        x_stack = torch.permute(x_splits, (1, 0, 2)).reshape(
+            batch_size * self.multimer, self.n_feat_per_sub)
 
         x_stack = self.batchnorm1d(x_stack)
         x_stack = self.fc1(x_stack)
@@ -141,13 +146,22 @@ class MultimerNet(nn.Module):
 #        x_stack = self.fc6(x_stack)
 #        x_stack = self.elu6(x_stack)
 #        x_stack = self.fc7(x_stack)
-        x_stack = self.softmax(x_stack) 
-        
-        x_splits = x_stack.reshape(self.multimer, batch_size, self.n_states).permute(1,0,2).reshape(batch_size, self.n_states * self.multimer)
+        x_stack = self.softmax(x_stack)
+
+        x_splits = x_stack.reshape(
+            self.multimer,
+            batch_size,
+            self.n_states).permute(
+            1,
+            0,
+            2).reshape(
+            batch_size,
+            self.n_states * self.multimer)
         return x_splits
 
+
 class VAMPNet_Multimer(VAMPNet):
-    def __init__(self, 
+    def __init__(self,
                  multimer: int,
                  n_states: int,
                  lobe: nn.Module, lobe_timelagged: Optional[nn.Module] = None,
@@ -163,16 +177,17 @@ class VAMPNet_Multimer(VAMPNet):
                          score_mode,
                          epsilon,
                          dtype)
-        
+
         self.multimer = multimer
         self.n_states = n_states
-        
+
         if self.multimer != self.lobe.module.multimer:
             raise ValueError('Mismatch multimer between vampnet and lobe')
         if self.n_states != self.lobe.module.n_states:
             raise ValueError('Mismatch multimer between vampnet and lobe')
-        
-    def partial_fit(self, data, train_score_callback: Callable[[int, torch.Tensor], None] = None):
+
+    def partial_fit(self, data, train_score_callback: Callable[[
+                    int, torch.Tensor], None] = None):
         if self.dtype == np.float32:
             self._lobe = self._lobe.float()
             self._lobe_timelagged = self._lobe_timelagged.float()
@@ -190,19 +205,30 @@ class VAMPNet_Multimer(VAMPNet):
         batch_0, batch_t = data[0], data[1]
 
         if isinstance(data[0], np.ndarray):
-            batch_0 = torch.from_numpy(data[0].astype(self.dtype)).to(device=self.device)
+            batch_0 = torch.from_numpy(
+                data[0].astype(
+                    self.dtype)).to(
+                device=self.device)
         if isinstance(data[1], np.ndarray):
-            batch_t = torch.from_numpy(data[1].astype(self.dtype)).to(device=self.device)
+            batch_t = torch.from_numpy(
+                data[1].astype(
+                    self.dtype)).to(
+                device=self.device)
 
         self.optimizer.zero_grad()
         x_0 = self.lobe(batch_0)
         x_t = self.lobe_timelagged(batch_t)
-        
+
         # x_0_aug = torch.concat([torch.roll(x_0, self.n_states * i, 1) for i in range(self.multimer)])
         # x_t_aug = torch.concat([torch.roll(x_t, self.n_states * i, 1) for i in range(self.multimer)])
 #        loss_value = vampnet_loss(x_0_aug, x_t_aug, method=self.score_method, epsilon=self.epsilon, mode=self.score_mode)
 
-        loss_value = vampnet_loss(x_0, x_t, method=self.score_method, epsilon=self.epsilon, mode=self.score_mode)
+        loss_value = vampnet_loss(
+            x_0,
+            x_t,
+            method=self.score_method,
+            epsilon=self.epsilon,
+            mode=self.score_mode)
 
         loss_value.backward()
         self.optimizer.step()
@@ -214,7 +240,7 @@ class VAMPNet_Multimer(VAMPNet):
         self._step += 1
 
         return self
-    
+
     def validate(self, validation_data: Tuple[torch.Tensor]) -> torch.Tensor:
 
         with disable_TF32():
@@ -225,7 +251,14 @@ class VAMPNet_Multimer(VAMPNet):
                 val = self.lobe(validation_data[0])
                 val_t = self.lobe_timelagged(validation_data[1])
                 # augmenting validation set by permutation
-                val_aug = torch.concat([torch.roll(val, self.n_states * i, 1) for i in range(self.multimer)])
-                val_t_aug = torch.concat([torch.roll(val_t, self.n_states * i, 1) for i in range(self.multimer)])
-                score_value = vamp_score(val_aug, val_t_aug, method=self.score_method, mode=self.score_mode, epsilon=self.epsilon)
+                val_aug = torch.concat(
+                    [torch.roll(val, self.n_states * i, 1) for i in range(self.multimer)])
+                val_t_aug = torch.concat(
+                    [torch.roll(val_t, self.n_states * i, 1) for i in range(self.multimer)])
+                score_value = vamp_score(
+                    val_aug,
+                    val_t_aug,
+                    method=self.score_method,
+                    mode=self.score_mode,
+                    epsilon=self.epsilon)
                 return score_value

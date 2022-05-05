@@ -22,23 +22,24 @@ args = parser.parse_args()
 
 seed_loc = args.seed_loc
 
+
 def run_command(seed_gpu_id, system):
     seed = seed_gpu_id[0]
     gpu_id = seed_gpu_id[1]
-    #TODO: make this a function
+    # TODO: make this a function
     command = f"/nethome/yzhuang/anaconda3/envs/deeplearning/bin/python build_system.py --system {system} --seed {seed} --gpu_id {gpu_id}"
     print(command)
     p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
     (output, err) = p.communicate()
 
-    #This makes the wait possible
+    # This makes the wait possible
     p_status = p.wait()
 
     process = multiprocessing.current_process()
     with open('prep_output/ ' + system + '_' + seed + '_' + str(process.pid) + '.output', 'w') as f:
         f.write('finish')
 
-    #This will give you the output of the command being executed
+    # This will give you the output of the command being executed
     print(f"{system} {seed}")
 
     # check ring penetration
@@ -53,16 +54,16 @@ def run_command(seed_gpu_id, system):
         p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
         (output, err) = p.communicate()
 
-        #This makes the wait possible
+        # This makes the wait possible
         p_status = p.wait()
 
         process = multiprocessing.current_process()
         with open('prep_output/ ' + system + '_' + seed + '_' + str(process.pid) + '.output', 'w') as f:
-    #        f.writelines(output)
-    #        f.writelines(err)
+            #        f.writelines(output)
+            #        f.writelines(err)
             f.write('finish')
 
-        #This will give you the output of the command being executed
+        # This will give you the output of the command being executed
     #    print("Command output: " + output)
         print(f"{system} {seed} has ring penetration")
         with open('ring_penetration.txt', 'a') as f:
@@ -73,8 +74,8 @@ pool = Pool(4)
 system = args.system
 seeds = os.listdir('../' + seed_loc + f'/{system}/')
 
-# need more than enough GPU_ids to iterate 
+# need more than enough GPU_ids to iterate
 gpu_ids = [0, 1, 2, 3] * 20
 run_command_para = partial(run_command,
-                        system=system)
+                           system=system)
 pool.map(run_command_para, zip(seeds, gpu_ids), chunksize=1)

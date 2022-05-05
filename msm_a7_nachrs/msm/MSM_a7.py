@@ -241,8 +241,7 @@ class MSMInitializer(object):
 
         feature_data = []
         for sys, df in md_data.groupby(['system']):
-            sys_data = raw_data[df.index[0] + self.all_start[ensemble_index]
-                :df.index[-1] + 1][::self.interval]
+            sys_data = raw_data[df.index[0] + self.all_start[ensemble_index]                                :df.index[-1] + 1][::self.interval]
             total_shape = sys_data.shape[1]
             per_shape = int(total_shape / self.multimer)
 
