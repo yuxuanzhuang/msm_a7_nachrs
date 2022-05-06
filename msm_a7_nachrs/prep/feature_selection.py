@@ -32,7 +32,6 @@ aligner_ref = align.AlignTraj(
     u_ref, u_ref, select='name CA', in_memory=True
 ).run()
 
-pwd = os.getcwd()
 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 class MDDataFrame(object):
@@ -50,6 +49,8 @@ class MDDataFrame(object):
                  "stride"]
             )
         )
+        self.computed = False
+        self.working_dir = os.getcwd() + '/'
 
     def add_metadata(self, trajectory_prot_files,
                      trajectory_sys_files, stride):
@@ -93,9 +94,12 @@ class MDDataFrame(object):
         rep_data = []
 
         md_name = u.trajectory.filename
-        seed = u.trajectory.filename.split(
-            '/')[len(pwd.split('/')) + 3].split("_")[1]
-        pathway = u.trajectory.filename.split('/')[len(pwd.split('/')) + 2]
+        seed_dir = [string for string in u.trajectory.filename.split('/') if 'SEEDS' in string]
+        seed = seed_dir[0].split('_')[-1]
+
+        #WARNING: this is a hack to get the pathway from the filename
+        pathway_dir = [string for string in u.trajectory.filename.split('/') if 'EPJ' in string]
+        pathway = pathway_dir[0]
 
         timestep = u.trajectory.dt
 
@@ -114,7 +118,7 @@ class MDDataFrame(object):
 
     def init_analysis_results(self, npartitions=None):
         self._create_dask_dataframe(npartitions=npartitions)
-        self.analysis_results = AnalysisResult(self.dd_dataframe)
+        self.analysis_results = AnalysisResult(self.dd_dataframe, working_dir=self.working_dir)
 
     def add_analysis(self, analysis):
         self.analysis_results.add_column_to_results(analysis)
@@ -122,10 +126,49 @@ class MDDataFrame(object):
     def compute(self):
         self.analysis_results.compute()
         self.analysis_results.append_to_dataframe(self.dataframe)
+        self.computed = True
 
+    def save(self, filename):
+        if not self.computed:
+            self.compute()
+
+        if not os.path.exists(f'{filename}.pickle'):
+            with open(f'{filename}.pickle', 'wb') as f:
+                pickle.dump(self, f)
+        else:
+            md_data_old = pickle.load(open(f'{filename}.pickle', 'rb'))
+
+            if set(md_data_old.universe) != set(self.dataframe.universe):
+                print('New seeds added')
+                with open(f'{filename}.pickle', 'wb') as f:
+                    pickle.dump(self, f)
+            elif md_data_old.shape[0] != self.dataframe.shape[0]:
+                print('N.frame changed')
+
+                old_cols = md_data_old.columns
+                new_cols = self.md_data.columns
+                print('New: ' + np.setdiff1d(new_cols, old_cols))
+                
+                extra_cols = np.setdiff1d(new_cols, old_cols)
+                
+                for extra_col in extra_cols:
+                    md_data_old[extra_col] = self.md_data[extra_col]
+                    
+                print('Common: ' + np.intersect1d(new_cols, old_cols))
+                common_cols = np.intersect1d(new_cols, old_cols)
+                
+                for common_col in common_cols:
+                    md_data_old[common_col] = self.md_data[common_col]
+                
+                shutil.copyfile(f'{filename}.pickle', filename + '_' + timestamp + '.pickle')
+                md_data_old.to_pickle(f'{filename}.pickle')
+            else:
+                print('No changes')
+                with open(f'{filename}.pickle', 'wb') as f:
+                    pickle.dump(self, f)
 
 class AnalysisResult(dict):
-    def __init__(self, md_data, u_ref=u_ref):
+    def __init__(self, md_data, working_dir, u_ref=u_ref):
         """
         md_data: dask.dataframe.core.DataFrame
         store all the data
@@ -136,6 +179,7 @@ class AnalysisResult(dict):
         super().__init__()
 
         self.md_data = md_data
+        self.working_dir = working_dir
         self.ref_info = {}
         self.u_ref = u_ref
 
@@ -174,7 +218,7 @@ class AnalysisResult(dict):
     def save_results(self):
         for item, df in self.items():
             if isinstance(df, dask.dataframe.core.DataFrame):
-                df.to_csv(pwd + '/analysis_results/' + str(item) + '-*.csv')
+                df.to_csv(self.working_dir + 'analysis_results/' + str(item) + '-*.csv')
 
     def filter_result(self, column, filter_threshold):
         """
@@ -211,45 +255,9 @@ class AnalysisResult(dict):
         for item in self.keys():
             dataframe[item] = self[item].iloc[:, 1]
 
-    def save(self, filename):
-        if not os.path.exists(f'{filename}.pickle'):
-            with open(f'{filename}.pickle', 'wb') as f:
-                pickle.dump(self, f)
-        else:
-            md_data_old = pickle.load(open(f'{filename}.pickle', 'rb'))
-
-            if set(md_data_old.universe) != set(self.dataframe.universe):
-                print('New seeds added')
-                with open(f'{filename}.pickle', 'wb') as f:
-                    pickle.dump(self, f)
-            elif md_data_old.shape[0] != self.dataframe.shape[0]:
-                print('N.frame changed')
-
-                old_cols = md_data_old.columns
-                new_cols = self.md_data.columns
-                print('New: ' + np.setdiff1d(new_cols, old_cols))
-                
-                extra_cols = np.setdiff1d(new_cols, old_cols)
-                
-                for extra_col in extra_cols:
-                    md_data_old[extra_col] = self.md_data[extra_col]
-                    
-                print('Common: ' + np.intersect1d(new_cols, old_cols))
-                common_cols = np.intersect1d(new_cols, old_cols)
-                
-                for common_col in common_cols:
-                    md_data_old[common_col] = self.md_data[common_col]
-                
-                shutil.copyfile(f'{filename}.pickle', filename + '_' + timestamp + '.pickle')
-                md_data_old.to_pickle(f'{filename}.pickle')
-            else:
-                print('No changes')
-                with open(f'{filename}.pickle', 'wb') as f:
-                    pickle.dump(self, f)
-
     @property
     def filename(self, timestamp=None):
-        return pwd + '/analysis_results/' + self.timestamp + '/'
+        return self.working_dir + 'analysis_results/' + self.timestamp + '/'
 
 
 class DaskChunkMdanalysis(object):

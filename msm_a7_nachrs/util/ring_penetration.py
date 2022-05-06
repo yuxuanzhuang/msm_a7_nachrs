@@ -76,6 +76,7 @@ def build_topology(universe, selection):
     for atom in universe.select_atoms(selection).atoms:  # might be buggy
         g.add_node(atom.index + 1, **{'segid': atom.segid,
                                       'resname': atom.resname,
+                                      'index': atom.index,
                                       'name': atom.name,
                                       'resid': atom.resid})
     #  Bonds
