@@ -1,6 +1,5 @@
-import logging
-logging.basicConfig(filename="logs.log", level=logging.INFO)
 import os.path
+import warnings
 
 import gc
 import pickle
@@ -88,10 +87,11 @@ class TrajectoryEnsemble(object):
         #    print(trajectory)
         with open(self.filename + '/log.log', 'a') as f:
             f.write(trajectory + '\n')
-        u = mda.Universe(trajectory + '/ca.pdb',
-                        trajectory + '/md.xtc')
-
-        u_bond = mda.Universe(trajectory + '/md.tpr')
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            u = mda.Universe(trajectory + '/ca.pdb',
+                             trajectory + '/md.xtc')
+            u_bond = mda.Universe(trajectory + '/md.tpr')
         u.add_bonds(u_bond.bonds.to_indices())
 
         u_prot = u.select_atoms('protein')
@@ -164,4 +164,4 @@ class TrajectoryEnsemble(object):
 
     @property
     def filename(self):
-        return self.pwd + '/' + self.ensemble_name
+        return self.pwd + '/' + self.ensemble_name + '/'

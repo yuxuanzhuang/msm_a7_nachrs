@@ -1,4 +1,4 @@
-from genericpath import exists
+fom genericpath import exists
 from MDAnalysis.analysis.rms import RMSD
 from MDAnalysis.analysis.distances import distance_array
 from MDAnalysis.lib.distances import calc_bonds
