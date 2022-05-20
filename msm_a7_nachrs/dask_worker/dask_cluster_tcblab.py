@@ -41,7 +41,7 @@ except BaseException:
 port = 8786
 
 
-class SLURMJob(SLURMJob):
+class TcllabSLURMJob(SLURMJob):
     def _generate_job(self):
         self.jobscript = []
         self.jobscript.append("#!/usr/bin/env bash \n")
@@ -84,11 +84,3 @@ class SLURMJob(SLURMJob):
             )
 
         self.jobid = out.split(' ')[-1][:-1]
-
-
-def add_workers(n_nodes, ip_address=ip_address, port=port):
-    slurm_job = SLURMJob(n_nodes=n_nodes,
-                         ip_address=ip_address,
-                         port=port)
-    slurm_job.submit_job()
-    return slurm_job

@@ -55,11 +55,3 @@ class PizDaintSLURMJob(SLURMJob):
             )
 
         self.jobid = out.split(' ')[-1][:-1]
-
-
-def add_workers(n_nodes):
-    slurm_job = SLURMJob(n_nodes=n_nodes,
-                         ip_address=ip_address,
-                         port=port)
-    slurm_job.submit_job()
-    return slurm_job

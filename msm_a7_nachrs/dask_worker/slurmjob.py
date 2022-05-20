@@ -58,3 +58,23 @@ class SLURMJob(object):
         # make sure the dbconnection gets closed
         self.cancel_worker()
         return False
+
+def add_workers(n_nodes, slurmjob, ip_address, port):
+    """
+    Add dask workers in Lindahl TCBLAB CLuster
+    Parameters
+    ----------
+    n_nodes: int
+        number of nodes
+    slurmjob: SLURMJob
+        SLURMJob class
+    ip_address: str
+        ip address of the dask scheduler
+    port: int
+        port of the dask scheduler
+    """
+    slurm_job = slurmjob(n_nodes=n_nodes,
+                        ip_address=ip_address,
+                        port=port)
+    slurm_job.submit_job()
+    return slurm_job
