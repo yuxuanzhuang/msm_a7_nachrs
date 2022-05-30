@@ -132,7 +132,7 @@ class get_domain_interdistance(DaskChunkMdanalysis):
         return result
 
 
-class get_domain_interdistance(DaskChunkMdanalysis):
+class get_domain_inverse_interdistance(DaskChunkMdanalysis):
     name = 'domain_inverse_distance'
 
     def set_feature_info(self, universe):
@@ -433,7 +433,7 @@ class get_pore_hydration(DaskChunkMdanalysis):
     name = 'pore_hydration'
     universe_file = 'system'
 
-    def set_feature_info(self):
+    def set_feature_info(self, universe):
         return ['pore_hydration']
 
     def run_analysis(self, universe, start, stop, step):
