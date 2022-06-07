@@ -437,8 +437,6 @@ class get_pore_hydration(DaskChunkMdanalysis):
         return ['pore_hydration']
 
     def run_analysis(self, universe, start, stop, step):
-        self._feature_info = ['pore_hydration']
-
         pore_hydrat_n = universe.select_atoms(
             "(cyzone 9 6 -6 resid 247) and resname TIP3 and name OH2", updating=True)
 

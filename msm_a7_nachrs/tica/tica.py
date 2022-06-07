@@ -3,6 +3,7 @@ from msm_a7_nachrs.msm.MSM_a7 import MSMInitializer
 import numpy as np
 import pandas as pd
 import pyemma
+from deeptime.decomposition import TICA
 import pickle
 from scipy.stats import pearsonr
 
@@ -49,17 +50,21 @@ class TICAInitializer(MSMInitializer):
 
     def start_analysis(self):
 
-        if (not os.path.isfile(self.filename + 'tica.pyemma')) or self.updating:
+        if (not os.path.isfile(self.filename + 'tica.pickle')) or self.updating:
             print('Start new TICA analysis')
             if not self.data_collected:
                 self.gather_feature_matrix()
 
-            self.tica = pyemma.coordinates.tica(
-                self.feature_trajectories, lag=self.lag)
-
-            self.tica_output = self.tica.get_output()
+            self.tica = TICA(var_cutoff=0.8, lagtime=self.lag).fit(
+                self.feature_trajectories)
+            model_onedim = self.tica.fetch_model()
+            self.tica_output = [model_onedim.transform(feature_traj) for feature_traj in self.feature_trajectories]
             self.tica_concatenated = np.concatenate(self.tica_output)
-            self.tica.save(self.filename + 'tica.pyemma', overwrite=True)
+            pickle.dump(self.tica,
+                open(
+                    self.filename +
+                    'tica.pickle',
+                    'wb'))
             pickle.dump(
                 self.tica_output,
                 open(
@@ -71,7 +76,8 @@ class TICAInitializer(MSMInitializer):
 
         else:
             print('Load old TICA results')
-            self.tica = pyemma.load(self.filename + 'tica.pyemma')
+            self.tica = pickle.load(
+                open(self.filename + 'tica.pickle', 'rb'))
             self.tica_output = pickle.load(
                 open(self.filename + 'output.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
