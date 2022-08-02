@@ -9,7 +9,17 @@ import itertools
 import os
 pwd = os.getcwd()
 
-
+subunit_iter_dic = {'A': 'B',
+                    'B': 'C',
+                    'C': 'D',
+                    'D': 'E',
+                    'E': 'A',
+                    'F': 'G',
+                    'G': 'H',
+                    'H': 'I',
+                    'I': 'J',
+                    'J': 'F'}
+                    
 #  used for mdtraj
 subunit_dic = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 0, -1: 4}
 

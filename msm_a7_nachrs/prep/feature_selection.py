@@ -1,13 +1,18 @@
 from ENPMDA.analysis import *
 from ENPMDA.analysis.base import DaskChunkMdanalysis
 
+
 from MDAnalysis.analysis.rms import RMSD
 from MDAnalysis.analysis.distances import distance_array
 from MDAnalysis.lib.distances import calc_bonds
 from MDAnalysis.analysis.distances import self_distance_array
+from MDAnalysis.analysis.distances import dist
 
 import MDAnalysis as mda
 import itertools
+import pandas as pd
+
+from ..util.utils import subunit_iter_dic
 
 domain_dict = {
     'ECD': '(resid 0 to 207)',
@@ -298,101 +303,6 @@ class get_c_alpha_distance(DaskChunkMdanalysis):
         return result
 
 
-class get_c_alpha_distance_filtered(DaskChunkMdanalysis):
-    name = 'ca_distance_filtered'
-
-    def run_analysis(self, universe, start, stop, step):
-
-        selection_comb = [['A F', 'A F B G C H'],
-                          ['B G', 'B G C H D I'],
-                          ['C H', 'C H D I E J'],
-                          ['D I', 'D I E J A F'],
-                          ['E J', 'E J A F B G']]
-
-        result = []
-        for ts in universe.trajectory[start:stop:step]:
-            r_ts = []
-
-            for selection1, selection2 in selection_comb:
-
-                ag_sel1_collection = []
-                ag_sel2_collection = []
-
-                for sel in selection1.split(' '):
-                    ag_sel1_collection.append(
-                        universe.select_atoms(
-                            'name CA and chainid ' + sel))
-                for sel in selection2.split(' '):
-                    ag_sel2_collection.append(
-                        universe.select_atoms(
-                            'name CA and chainid ' + sel))
-
-                distance_matrix = distance_array(np.concatenate([ag.positions for ag in ag_sel1_collection]),
-                                                 np.concatenate([ag.positions for ag in ag_sel2_collection]))
-                filtered_distance_matrix = []
-                for i, j in filtered_candidatess:
-                    filtered_distance_matrix.append(distance_matrix[i, j])
-
-                r_ts.extend(filtered_distance_matrix)
-            result.append(r_ts)
-
-        self._feature_info = []
-        for selection1, selection2 in selection_comb:
-            for feature_chain in feature_list:
-                self._feature_info.append(
-                    selection1.split()[0] + '_' + feature_chain)
-
-        return result
-
-
-class get_c_alpha_distance_filtered_inverse(DaskChunkMdanalysis):
-    name = 'inverse_ca_distance_filtered'
-
-    def run_analysis(self, universe, start, stop, step):
-
-        selection_comb = [['A F', 'A F B G C H'],
-                          ['B G', 'B G C H D I'],
-                          ['C H', 'C H D I E J'],
-                          ['D I', 'D I E J A F'],
-                          ['E J', 'E J A F B G']]
-
-        result = []
-        for ts in universe.trajectory[start:stop:step]:
-            r_ts = []
-
-            for selection1, selection2 in selection_comb:
-
-                ag_sel1_collection = []
-                ag_sel2_collection = []
-
-                for sel in selection1.split(' '):
-                    ag_sel1_collection.append(
-                        universe.select_atoms(
-                            'name CA and chainid ' + sel))
-                for sel in selection2.split(' '):
-                    ag_sel2_collection.append(
-                        universe.select_atoms(
-                            'name CA and chainid ' + sel))
-
-                distance_matrix = distance_array(np.concatenate([ag.positions for ag in ag_sel1_collection]),
-                                                 np.concatenate([ag.positions for ag in ag_sel2_collection]))
-                filtered_distance_matrix = []
-                for i, j in filtered_candidatess:
-                    filtered_distance_matrix.append(
-                        1.0 / distance_matrix[i, j])
-
-                r_ts.extend(filtered_distance_matrix)
-            result.append(r_ts)
-
-        self._feature_info = []
-        for selection1, selection2 in selection_comb:
-            for feature_chain in feature_list:
-                self._feature_info.append(
-                    selection1.split()[0] + '_' + feature_chain)
-
-        return result
-
-
 class get_rmsd_ref(DaskChunkMdanalysis):
     name = 'rmsd_to_stat'
 
@@ -444,3 +354,122 @@ class get_pore_hydration(DaskChunkMdanalysis):
         for ts in universe.trajectory[start:stop:step]:
             n_hydration.append(pore_hydrat_n.n_atoms)
         return n_hydration
+
+
+
+class get_c_alpha_distance_10A(DaskChunkMdanalysis):
+    name = 'ca_distance_10A'
+    
+    def set_feature_info(self, universe):
+        pair_indices_union_df = pd.read_pickle('pair_indices_union_df.pickle')
+        feat_info = []
+        ag1 = universe.atoms[[]]
+        ag2 = universe.atoms[[]]
+        for subunit in range(5):
+            for ind, row in pair_indices_union_df.iterrows():
+                ag1 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a1_chain, row.a1_resid))
+                ag2 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a2_chain, row.a2_resid))
+            pair_indices_union_df = pair_indices_union_df.replace({"a1_chain": subunit_iter_dic})
+            pair_indices_union_df = pair_indices_union_df.replace({"a2_chain": subunit_iter_dic}) 
+            
+        for ca_ag1, ca_ag2 in zip(ag1, ag2):
+            feat_info.append(f'{ca_ag1.segid}_{ca_ag1.resid}_{ca_ag2.segid}_{ca_ag2.resid}')
+        self.ag1_indices = ag1.indices
+        self.ag2_indices = ag2.indices
+        return feat_info
+
+    def run_analysis(self, universe, start, stop, step):
+        result = []
+        ag1 = universe.atoms[self.ag1_indices]
+        ag2 = universe.atoms[self.ag2_indices]
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(dist(ag1, ag2)[2])
+        return result
+
+class get_c_alpha_distance_10A_inverse(DaskChunkMdanalysis):
+    name = 'ca_distance_10A_inverse'
+    
+    def set_feature_info(self, universe):
+        pair_indices_union_df = pd.read_pickle('pair_indices_union_df.pickle')
+        feat_info = []
+        ag1 = universe.atoms[[]]
+        ag2 = universe.atoms[[]]
+        for subunit in range(5):
+            for ind, row in pair_indices_union_df.iterrows():
+                ag1 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a1_chain, row.a1_resid))
+                ag2 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a2_chain, row.a2_resid))
+            pair_indices_union_df = pair_indices_union_df.replace({"a1_chain": subunit_iter_dic})
+            pair_indices_union_df = pair_indices_union_df.replace({"a2_chain": subunit_iter_dic}) 
+            
+        for ca_ag1, ca_ag2 in zip(ag1, ag2):
+            feat_info.append(f'{ca_ag1.segid}_{ca_ag1.resid}_{ca_ag2.segid}_{ca_ag2.resid}_inverse')
+        self.ag1_indices = ag1.indices
+        self.ag2_indices = ag2.indices
+        return feat_info
+
+    def run_analysis(self, universe, start, stop, step):
+        result = []
+        ag1 = universe.atoms[self.ag1_indices]
+        ag2 = universe.atoms[self.ag2_indices]
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(1 / dist(ag1, ag2)[2])
+        return result
+
+
+class get_c_alpha_distance_10A_2diff(DaskChunkMdanalysis):
+    name = 'ca_distance_10A_2diff'
+    
+    def set_feature_info(self, universe):
+        pair_indices_union_df = pd.read_pickle('pair_indices_union_df_2div.pickle')
+        feat_info = []
+        ag1 = universe.atoms[[]]
+        ag2 = universe.atoms[[]]
+        for subunit in range(5):
+            for ind, row in pair_indices_union_df.iterrows():
+                ag1 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a1_chain, row.a1_resid))
+                ag2 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a2_chain, row.a2_resid))
+            pair_indices_union_df = pair_indices_union_df.replace({"a1_chain": subunit_iter_dic})
+            pair_indices_union_df = pair_indices_union_df.replace({"a2_chain": subunit_iter_dic}) 
+            
+        for ca_ag1, ca_ag2 in zip(ag1, ag2):
+            feat_info.append(f'{ca_ag1.segid}_{ca_ag1.resid}_{ca_ag2.segid}_{ca_ag2.resid}')
+        self.ag1_indices = ag1.indices
+        self.ag2_indices = ag2.indices
+        return feat_info
+
+    def run_analysis(self, universe, start, stop, step):
+        result = []
+        ag1 = universe.atoms[self.ag1_indices]
+        ag2 = universe.atoms[self.ag2_indices]
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(dist(ag1, ag2)[2])
+        return result
+
+class get_c_alpha_distance_10A_inverse_2diff(DaskChunkMdanalysis):
+    name = 'ca_distance_10A_inverse_2diff'
+    
+    def set_feature_info(self, universe):
+        pair_indices_union_df = pd.read_pickle('pair_indices_union_df_2div.pickle')
+        feat_info = []
+        ag1 = universe.atoms[[]]
+        ag2 = universe.atoms[[]]
+        for subunit in range(5):
+            for ind, row in pair_indices_union_df.iterrows():
+                ag1 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a1_chain, row.a1_resid))
+                ag2 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a2_chain, row.a2_resid))
+            pair_indices_union_df = pair_indices_union_df.replace({"a1_chain": subunit_iter_dic})
+            pair_indices_union_df = pair_indices_union_df.replace({"a2_chain": subunit_iter_dic}) 
+            
+        for ca_ag1, ca_ag2 in zip(ag1, ag2):
+            feat_info.append(f'{ca_ag1.segid}_{ca_ag1.resid}_{ca_ag2.segid}_{ca_ag2.resid}_inverse')
+        self.ag1_indices = ag1.indices
+        self.ag2_indices = ag2.indices
+        return feat_info
+
+    def run_analysis(self, universe, start, stop, step):
+        result = []
+        ag1 = universe.atoms[self.ag1_indices]
+        ag2 = universe.atoms[self.ag2_indices]
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(1 / dist(ag1, ag2)[2])
+        return result

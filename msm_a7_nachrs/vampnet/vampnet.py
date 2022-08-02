@@ -1,4 +1,5 @@
 from ..msm.MSM_a7 import MSMInitializer
+from ..util.dataloader import MultimerTrajectoriesDataset
 
 import os
 import numpy as np
@@ -27,36 +28,6 @@ from copy import deepcopy
 from typing import Optional, Union, Callable, Tuple
 from deeptime.decomposition.deep import vampnet_loss, vamp_score
 from deeptime.util.torch import disable_TF32, map_data
-
-
-class MultimerTrajectoriesDataset(TrajectoriesDataset):
-    """
-    A dataset for multimer trajectories.
-    Warning: The features in this dataset should be n-fold symmetric.
-    """
-
-    def __init__(self, multimer: int, data: List[TrajectoryDataset]):
-        self.multimer = multimer
-        super().__init__(data)
-
-    @staticmethod
-    def from_numpy(lagtime, multimer, data: List[np.ndarray]):
-        assert isinstance(data, list)
-        assert len(data) > 0 and all(
-            data[0].shape[1:] == x.shape[1:] for x in data), "Shape mismatch!"
-
-        data_new = []
-        total_shape = data[0].shape[1]
-        per_shape = int(total_shape / multimer)
-
-        for i in range(multimer):
-            data_new.extend(
-                [np.roll(traj.reshape(traj.shape[0], multimer, per_shape),
-                         i, axis=1).reshape(traj.shape[0], total_shape)
-                 for traj in data])
-        return MultimerTrajectoriesDataset(
-            multimer, [TrajectoryDataset(lagtime, traj) for traj in data_new])
-
 
 class VAMPNETInitializer(MSMInitializer):
     prefix = "vampnet"

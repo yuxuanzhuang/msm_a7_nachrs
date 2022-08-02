@@ -12,12 +12,14 @@ import itertools
 import MDAnalysis as mda
 import MDAnalysis.transformations as trans
 from MDAnalysis.analysis import align, pca, rms
+from tqdm import tqdm
 
 import dask.dataframe as dd
 
 from ..util.utils import *
 from ..datafiles import BGT, EPJ, EPJPNU
 from ..msm.MSM_a7 import MSMInitializer
+from ..util.dataloader import MultimerTrajectoriesDataset, get_symmetrized_data
 
 pathways = [
     'BGT_EPJPNU',
@@ -44,34 +46,48 @@ system_exclusion_dic = {'BGT_EPJPNU': [],
                         'EPJ_BGT': [],
                         'EPJ_EPJPNU': []}
 
-
 class TICAInitializer(MSMInitializer):
     prefix = "tica"
 
-    def start_analysis(self):
-
+    def start_analysis(self, block_size=10):
+        os.makedirs(self.filename, exist_ok=True)
         if (not os.path.isfile(self.filename + 'tica.pickle')) or self.updating:
             print('Start new TICA analysis')
-            if not self.data_collected:
-                self.gather_feature_matrix()
+            if self.in_memory:
+                if not self.data_collected:
+                    self.gather_feature_matrix()
 
-            self.tica = TICA(var_cutoff=0.8, lagtime=self.lag).fit(
-                self.feature_trajectories)
-            model_onedim = self.tica.fetch_model()
-            self.tica_output = [model_onedim.transform(feature_traj) for feature_traj in self.feature_trajectories]
-            self.tica_concatenated = np.concatenate(self.tica_output)
-            pickle.dump(self.tica,
+                self.tica = TICA(var_cutoff=0.8, lagtime=self.lag)
+                self.tica.fit(self.feature_trajectories)
+                pickle.dump(self.tica,
                 open(
                     self.filename +
                     'tica.pickle',
                     'wb'))
+                self.tica_output = [self.tica.transform(feature_traj) for feature_traj in self.feature_trajectories]
+
+            else:
+                self.tica = TICA(var_cutoff=0.8, lagtime=self.lag)
+                self.partial_fit_tica(block_size=block_size)
+                _ = self.tica.fetch_model()
+                pickle.dump(self.tica,
+                open(
+                    self.filename +
+                    'tica.pickle',
+                    'wb'))
+                self.tica_output = self.transform_feature_trajectories(self.md_dataframe,
+                                        start=self.start)
+
+            self.tica_concatenated = np.concatenate(self.tica_output)
+
             pickle.dump(
                 self.tica_output,
                 open(
                     self.filename +
                     'output.pickle',
                     'wb'))
-            self.dump_feature_trajectories()
+#            if self.in_memory:
+#                self.dump_feature_trajectories()
             gc.collect()
 
         else:
@@ -82,128 +98,71 @@ class TICAInitializer(MSMInitializer):
                 open(self.filename + 'output.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
 
-    def clustering_with_dask(self, meaningful_tic, n_clusters, updating=False):
-        self.n_clusters = n_clusters
-        self.meaningful_tic = meaningful_tic
+    def partial_fit_tica(self, block_size=1):
+        """
+        Fit TICA to a subset of the data."""
+        feature_df = self.md_dataframe.get_feature(self.feature_input_list,
+                                in_memory=False)
+        feature_trajectories = []
+        for ind, (system, row) in tqdm(enumerate(feature_df.iterrows()), total=feature_df.shape[0]):
+            if system not in self.system_exclusion:
+                feature_trajectory = []
+                for feat_loc, indice, feat_type in zip(row[self.feature_input_list].values,
+                self.feature_input_indice_list, self.feature_type_list):
+                    raw_data = np.load(feat_loc, allow_pickle=True)
+                    raw_data = raw_data.reshape(raw_data.shape[0], -1)[self.start:, indice]
+                    if feat_type == 'global':
+                        # repeat five times
+                        raw_data = np.repeat(raw_data, 5, axis=1).reshape(raw_data.shape[0], -1, 5).transpose(0, 2, 1)
+                    else:
+                        raw_data = raw_data.reshape(raw_data.shape[0], 5, -1)
 
-        self.tica_output_filter = [
-            np.asarray(output)[
-                :, meaningful_tic] for output in self.tica_output]
+                    feature_trajectory.append(raw_data)
 
-        if not (os.path.isfile(self.cluster_filename + '_dask.pickle')) or updating:
-            print('Start new cluster analysis')
+                feature_trajectory = np.concatenate(feature_trajectory, axis=2).reshape(raw_data.shape[0], -1)
+                if (ind+1) % block_size == 0:
+                    dataset = MultimerTrajectoriesDataset.from_numpy(
+                        self.lag, self.multimer, feature_trajectories)
+                    self.tica.partial_fit(dataset)
+                    feature_trajectories = []
+                else:
+                    feature_trajectories.append(feature_trajectory)
 
-            # not implemented yet
-            self.d_cluster = dask.KMeans(
-                n_clusters=self.n_clusters, init='k-means++', n_jobs=64)
-            self.d_cluster.fit(np.concatenate(self.tica_output_filter)[::10])
-            self.d_cluster_dtrajs = [self.d_cluster.predict(
-                tica_out_traj).compute() for tica_out_traj in self.tica_output_filter]
+        # fit the remaining data
+        if len(feature_trajectories) > 0:
+            dataset = MultimerTrajectoriesDataset.from_numpy(
+                self.lag, self.multimer, feature_trajectories)
+            self.tica.partial_fit(dataset)
 
-            pickle.dump(
-                self.d_cluster,
-                open(
-                    self.cluster_filename +
-                    '_dask.pickle',
-                    'wb'))
-            pickle.dump(
-                self.d_cluster_dtrajs,
-                open(
-                    self.cluster_filename +
-                    '_output_dask.pickle',
-                    'wb'))
+    def transform_feature_trajectories(self, md_dataframe, start=0):
+        """
+        Map new feature trajectories to the TICA space.
+        """
+        mapped_feature_trajectories = []
+        feature_df = md_dataframe.get_feature(self.feature_input_list,
+                    in_memory=False)
+        for system, row in tqdm(feature_df.iterrows(), total=feature_df.shape[0]):
+            feature_trajectory = []
+            for feat_loc, indice, feat_type in zip(row[self.feature_input_list].values,
+                                                   self.feature_input_indice_list,
+                                                   self.feature_type_list):
+                raw_data = np.load(feat_loc, allow_pickle=True)
+                raw_data = raw_data.reshape(raw_data.shape[0], -1)[start:, indice]
+                if feat_type == 'global':
+                    # repeat five times
+                    raw_data = np.repeat(raw_data, 5, axis=1).reshape(raw_data.shape[0], -1, 5).transpose(0, 2, 1)
+                else:
+                    raw_data = raw_data.reshape(raw_data.shape[0], 5, -1)
 
-        else:
-            print('Load old cluster results')
+                feature_trajectory.append(raw_data)
 
-            self.d_cluster = pickle.load(
-                open(
-                    self.cluster_filename +
-                    '_dask.pickle',
-                    'rb'))
-            self.d_cluster_dtrajs = pickle.load(
-                open(self.cluster_filename + '_output_dask.pickle', 'rb'))
+            feature_trajectory = np.concatenate(feature_trajectory, axis=2).reshape(raw_data.shape[0], -1)
+            feature_trajectories = get_symmetrized_data([feature_trajectory], self.multimer)
+            for single_traj in feature_trajectories:
+                mapped_feature_trajectories.append(self.tica.transform(single_traj))
 
-        self.d_dtrajs_concatenated = np.concatenate(self.d_cluster_dtrajs)
+        return mapped_feature_trajectories
 
-    def clustering_with_pyemma(
-            self, meaningful_tic, n_clusters, updating=False):
-        self.n_clusters = n_clusters
-        self.meaningful_tic = meaningful_tic
-
-        self.tica_output_filter = [
-            np.asarray(output)[
-                :, meaningful_tic] for output in self.tica_output]
-
-        if not (os.path.isfile(self.cluster_filename +
-                '_pyemma.pickle')) or updating:
-            print('Start new cluster analysis')
-
-            self.cluster = pyemma.coordinates.cluster_kmeans(self.tica_output_filter,
-                                                             k=self.n_clusters,
-                                                             max_iter=100,
-                                                             stride=100)
-            self.cluster_dtrajs = self.cluster.dtrajs
-
-            pickle.dump(
-                self.cluster,
-                open(
-                    self.cluster_filename +
-                    '_pyemma.pickle',
-                    'wb'))
-            pickle.dump(
-                self.cluster_dtrajs,
-                open(
-                    self.cluster_filename +
-                    '_output_pyemma.pickle',
-                    'wb'))
-
-        else:
-            print('Load old cluster results')
-            self.cluster = pickle.load(
-                open(
-                    self.cluster_filename +
-                    '_pyemma.pickle',
-                    'rb'))
-            self.cluster_dtrajs = pickle.load(
-                open(
-                    self.cluster_filename +
-                    '_output_pyemma.pickle',
-                    'rb'))
-
-        self.dtrajs_concatenated = np.concatenate(self.cluster_dtrajs)
-
-    def get_its(self, cluster='dask'):
-        if cluster == 'dask':
-            self.its = pyemma.msm.its(
-                self.d_cluster_dtrajs,
-                lags=int(
-                    200 / self.dt),
-                nits=10,
-                errors='bayes',
-                only_timescales=True)
-        elif cluster == 'pyemma':
-            self.its = pyemma.msm.its(
-                self.cluster_dtrajs,
-                lags=int(
-                    200 / self.dt),
-                nits=10,
-                errors='bayes',
-                only_timescales=True)
-
-        return self.its
-
-    def get_msm(self, lag, cluster='dask'):
-        self.msm_lag = lag
-
-        if cluster == 'dask':
-            self.msm = pyemma.msm.bayesian_markov_model(
-                self.d_cluster_dtrajs, lag=self.msm_lag, dt_traj=str(self.dt) + ' ns')
-        elif cluster == 'pyemma':
-            self.msm = pyemma.msm.bayesian_markov_model(
-                self.cluster_dtrajs, lag=self.msm_lag, dt_traj=str(self.dt) + ' ns')
-
-        return self.msm
 
     def get_correlation(self, feature):
         md_data = pd.read_pickle(self.feature_file)

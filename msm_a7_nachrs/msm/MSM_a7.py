@@ -9,8 +9,10 @@ import gc
 import itertools
 import MDAnalysis as mda
 from MDAnalysis.analysis import align
-
+from tqdm import tqdm
 from ..util.utils import *
+from ..util.dataloader import MultimerTrajectoriesDataset, get_symmetrized_data
+
 from ..datafiles import BGT, EPJ, EPJPNU
 
 
@@ -80,214 +82,91 @@ class MSMInitializer(object):
     prefix = "msm"
 
     def __init__(self,
-                 feature_selection,
+                 md_dataframe,
+                 lag,
+                 start=0,
                  multimer=5,
                  symmetrize=True,
                  updating=True,
-                 dumping=True,
-                 lag=100,
-                 start=0,
-                 pathways=traj_notes,
-                 system_exclusion_dic=system_exclusion_dic,
-                 domain_exclusion=[],
-                 feature_file='msm_features.pickle',
-                 interval=1):
+                 dumping=False,
+                 system_exclusion=[],
+                 interval=1,
+                 in_memory=True):
+
+        self.md_dataframe = md_dataframe
+
         # lag for # of frames
         self.lag = lag
-        self.feature_selection = feature_selection
         self.start = start
-        self.dumping = dumping
         self.multimer = multimer
         self.symmetrize = symmetrize
-
-        self.pathways = pathways
         self.updating = updating
-        self.feature_file = feature_file
-        self.system_exclusion_dic = system_exclusion_dic
-        self.interval = interval
-        self.md_data = pd.read_pickle(self.feature_file)
-#        self.md_data = self.md_data[self.md_data.frame % (3 * self.interval) == 0]
+        self.dumping = dumping
 
+        self.system_exclusion = system_exclusion
+
+        self.interval = interval
+        self.in_memory = in_memory
+        self.data_collected = False
+
+        self.md_data = self.md_dataframe.dataframe
         # dt: ns
         self.dt = (
             self.md_data.traj_time[1] - self.md_data.traj_time[0]) / 1000 * self.interval
         print(f'lag time is {self.lag * self.dt} ns')
+        print(f'start time is {self.start * self.dt} ns')
 
-        system_exclusion = []
-        for pathway in self.pathways:
-            for exclu_seed in system_exclusion_dic[pathway]:
-                exclu_system_ind = self.md_data[self.md_data.pathway ==
-                                                pathway][self.md_data.seed == exclu_seed]['system'].values[0]
-                system_exclusion.append(exclu_system_ind)
 
-        if feature_selection not in self.md_data.columns:
-            raise ValueError(
-                f'feature selection {feature_selection} not in'
-                f'{self.feature_file}\n'
-                f'Available features are {self.md_data.columns}')
-
-        self.feature_info = []
-        self.all_feed_feature_indice = []
-        self.get_feature_info(feature_selection, domain_exclusion)
-        print(
-            f'added feature selection {feature_selection}, # of features: {len(self.feature_info[-1])}')
-
-        self.all_feature_selection = [feature_selection]
-        self.all_feature_file = [feature_file]
-        self.all_pathways = [pathways]
-        self.all_start = [start]
-        self.all_system_exclusion_dic = [system_exclusion_dic]
-        self.all_domain_exclusion = [domain_exclusion]
-        self.all_system_exclusion = [system_exclusion]
-        self.all_md_data = [self.md_data]
-
-        self.data_collected = False
+        self.feature_input_list = []
+        self.feature_input_info_list = []
+        self.feature_input_indice_list = []
+        self.feature_type_list = []
 
         os.makedirs(self.filename, exist_ok=True)
 
-    def add_features(self,
-                     feature_selection,
-                     domain_exclusion=[]):
 
-        if self.data_collected:
-            raise ValueError('Feature already collected, create new instance')
-        self.all_feature_selection.append(feature_selection)
-        self.all_domain_exclusion.append(domain_exclusion)
 
-        if feature_selection not in self.md_data.columns:
+    def add_feature(self, feature_selected, excluded_indices=[], feat_type='subunit'):
+        if feature_selected not in self.md_dataframe.analysis_list:
             raise ValueError(
-                f'feature selection {feature_selection} not in'
-                f'{self.feature_file}\n'
-                f'Available features are {self.md_data.columns[8:]}')
+                f'feature selection {feature_selected} not available\n'
+                f'Available features are {self.md_dataframe.analysis_list}')
+        self.feature_input_list.append(feature_selected)
 
-        for ind, md_data in enumerate(self.all_md_data):
-            if feature_selection not in md_data.columns:
-                raise ValueError(
-                    f'feature selection {feature_selection} not in'
-                    f'{self.add_features[ind]}\n'
-                    f'Available features are {md_data.columns[8:]}')
-        self.get_feature_info(feature_selection, domain_exclusion)
-        print(
-            f'added feature selection {feature_selection}, # of features: {len(self.feature_info[-1])}')
-
-    def add_trajectories(self,
-                         feature_file='msm_features_new.pickle',
-                         pathways=traj_notes,
-                         start=None,
-                         system_exclusion_dic=system_exclusion_dic,
-                         domain_exclusion=[]):
-
-        if start is None:
-            start = self.start
-
-        if self.data_collected:
-            raise ValueError('Feature already collected, create new instance')
-
-        self.all_feature_file.append(feature_file)
-        self.all_pathways.append(pathways)
-        self.all_start.append(start)
-        self.all_system_exclusion_dic.append(system_exclusion_dic)
-        self.all_domain_exclusion.append(domain_exclusion)
-
-        md_data = pd.read_pickle(feature_file)
-#        md_data = md_data[md_data.frame % (3 * self.interval) == 0]
-
-        if self.dt != (
-                md_data.traj_time[1] - md_data.traj_time[0]) / 1000 * self.interval:
-            raise ValueError(
-                'dt is not the same in new feature file ' +
-                feature_file)
-
-        self.all_md_data.append(md_data)
-
-        system_exclusion = []
-        for pathway in pathways:
-            for exclu_seed in system_exclusion_dic[pathway]:
-                exclu_system_ind = self.md_data[self.md_data.pathway ==
-                                                pathway][self.md_data.seed == exclu_seed]['system'].values[0]
-                system_exclusion.append(exclu_system_ind)
-
-        self.all_system_exclusion.append(system_exclusion)
-
-    def get_feature_info(self, feature_selection, domain_exclusion):
         feature_info = np.load(
-            './analysis_results/' +
-            feature_selection +
-            '_feature_info.npy',
-            allow_pickle=True)
-        feed_feature_indice = []
-        for ind, feat in enumerate(feature_info):
-            if not any(exl_feat in feat for exl_feat in domain_exclusion):
-                feed_feature_indice.append(ind)
+            self.md_dataframe.analysis_results.filename + feature_selected + '_feature_info.npy'
+            )
 
-        self.feature_info.append(feature_info[feed_feature_indice])
-        self.all_feed_feature_indice.append(feed_feature_indice)
+        self.feature_input_info_list.append(np.delete(feature_info, excluded_indices))
+        self.feature_input_indice_list.append(np.delete(np.arange(len(feature_info)), excluded_indices))
+        self.feature_type_list.append(feat_type)
+        print(
+            f'added feature selection {feature_selected} type: {feat_type}, # of features: {len(self.feature_input_info_list[-1])}')
 
-    def load_raw_data(self, feature_selection, feature_index, ensemble_index):
-        # TODO: feature dim 1 not work
-        md_data = self.all_md_data[ensemble_index]
-
-        raw_data = np.concatenate([np.load(location, allow_pickle=True)[:, self.all_feed_feature_indice[feature_index]]
-                                   for location, df in md_data.groupby(feature_selection, sort=False)])
-
-        # TODO: make sure float16 is enough accuracy
-        raw_data = raw_data.astype(np.float32)
-        md_data = md_data[md_data.pathway.isin(
-            self.all_pathways[ensemble_index])]
-        print('Feed n.frames: ' + str(md_data.shape[0]))
-
-        md_data = md_data[~md_data.system.isin(
-            self.all_system_exclusion[ensemble_index])]
-
-        feature_data = []
-        for sys, df in md_data.groupby(['system']):
-            sys_data = raw_data[df.index[0] + self.all_start[ensemble_index]                                :df.index[-1] + 1][::self.interval]
-            total_shape = sys_data.shape[1]
-            per_shape = int(total_shape / self.multimer)
-
-            if self.symmetrize:
-                #  symmetrization of features
-                for permutation in range(self.multimer):
-                    feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], self.multimer, per_shape),
-                                                permutation, axis=1).reshape(sys_data.shape[0], total_shape))
-            else:
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], self.multimer, per_shape),
-                                            0, axis=1).reshape(sys_data.shape[0], total_shape))
-
-        del raw_data
-        del sys_data
-        gc.collect()
-        return feature_data
-
+    
     def gather_feature_matrix(self):
-        all_feature_data = []
-        for ensemble_index, ensemble in enumerate(self.all_md_data):
-            print('run for ' + self.all_feature_file[ensemble_index])
-            feature_ensemble = []
-            for feature_index, feature_selection in enumerate(
-                    self.all_feature_selection):
-                print('run for ' + feature_selection)
-                feature_ensemble.append(
-                    self.load_raw_data(
-                        feature_selection,
-                        feature_index,
-                        ensemble_index))
-                gc.collect()
-            concat_feature_data = []
-            for system in range(0, len(feature_ensemble[0])):
-                concat_feature_data.append(np.concatenate([feat_sys[system].astype(
-                    np.float32) for feat_sys in feature_ensemble], axis=1, dtype=np.float32))
-            all_feature_data.append(concat_feature_data)
+        """load feature matrix into memory"""
+        self.feature_trajectories = []
+        feature_df = self.md_dataframe.get_feature(self.feature_input_list,
+                    in_memory=False)
+        for system, row in tqdm(feature_df.iterrows(), total=feature_df.shape[0]):
+            feature_trajectory = []
+            for feat_loc, indice, feat_type in zip(row[self.feature_input_list].values,
+                                                   self.feature_input_indice_list,
+                                                   self.feature_type_list):
+                raw_data = np.load(feat_loc, allow_pickle=True)
+                raw_data = raw_data.reshape(raw_data.shape[0], -1)[:, indice]
+                if feat_type == 'global':
+                    # repeat five times
+                    raw_data = np.repeat(raw_data, 5, axis=1).reshape(raw_data.shape[0], -1, 5).transpose(0, 2, 1)
+                else:
+                    raw_data = raw_data.reshape(raw_data.shape[0], 5, -1)
 
-            del feature_ensemble
-            del concat_feature_data
-
-            gc.collect()
+                feature_trajectory.append(raw_data)
+            feature_trajectory = np.concatenate(feature_trajectory, axis=2).reshape(raw_data.shape[0], -1)
+            self.feature_trajectories.extend(get_symmetrized_data([feature_trajectory], self.multimer))
         self.data_collected = True
-        self.feature_trajectories = list(
-            itertools.chain.from_iterable(all_feature_data))
-        self.n_trajectories = len(self.feature_trajectories)
-    #    self.feature_trajectories = list(np.concatenate(all_feature_data))
+                
 
     def dump_feature_trajectories(self):
         if self.data_collected:
@@ -304,6 +183,7 @@ class MSMInitializer(object):
         del self.feature_trajectories
         gc.collect()
 
+
     def get_feature_trajectories(self):
         if self.data_collected:
             return self.feature_trajectories
@@ -317,6 +197,7 @@ class MSMInitializer(object):
                         allow_pickle=True))
 
     def start_analysis(self):
+        os.makedirs(self.filename, exist_ok=True)
         raise NotImplementedError("Should be overridden by subclass")
         if not self.data_collected:
             self.gather_feature_matrix()
@@ -369,7 +250,7 @@ class MSMInitializer(object):
 
         self.dtrajs_concatenated = np.concatenate(self.cluster_dtrajs)
 
-    def get_its(self, cluster='dask'):
+    def get_its(self, cluster='pyemma'):
         if cluster == 'dask':
             self.its = pyemma.msm.its(
                 self.d_cluster_dtrajs,
@@ -389,7 +270,7 @@ class MSMInitializer(object):
 
         return self.its
 
-    def get_msm(self, lag, cluster='dask'):
+    def get_msm(self, lag, cluster='pyemma'):
         self.msm_lag = lag
 
         if cluster == 'dask':
@@ -400,6 +281,7 @@ class MSMInitializer(object):
                 self.cluster_dtrajs, lag=self.msm_lag, dt_traj=str(self.dt) + ' ns')
 
         return self.msm
+
 
     def get_correlation(self, feature):
         md_data = pd.read_pickle(self.feature_file)
@@ -455,8 +337,12 @@ class MSMInitializer(object):
 
     @property
     def filename(self):
-        return './msmfile/' + self.prefix + '_' + self.feature_selection + '_lag' + str(self.lag) + '_start' + str(
-            self.start) + '_pathway' + ''.join([str(pathway_ind_dic[pathway]) for pathway in self.pathways]) + '/'
+        if self.feature_input_list == []:
+            feature_list_str = ''
+        else:
+            feature_list_str = '__'.join([f'{feature}_{len(feat_n)}' for feature, feat_n in zip(self.feature_input_list, self.feature_input_info_list)])
+
+        return f'{self.md_dataframe.filename}/msmfile/{self.prefix}/{self.lag}/{feature_list_str}/'
 
     @property
     def cluster_filename(self):
