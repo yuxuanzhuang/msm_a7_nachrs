@@ -27,18 +27,24 @@ from copy import deepcopy
 
 from typing import Optional, Union, Callable, Tuple
 from deeptime.decomposition.deep import vampnet_loss, vamp_score
-from deeptime.util.torch import disable_TF32, map_data
+from deeptime.util.torch import disable_TF32, map_data, multi_dot
 
 class VAMPNETInitializer(MSMInitializer):
     prefix = "vampnet"
 
     def start_analysis(self):
+        os.makedirs(self.filename, exist_ok=True)
+
         if (not os.path.isfile(self.filename + 'vampnet.pyemma')) or self.updating:
             print('Start new VAMPNET analysis')
-            if not self.data_collected:
-                self.gather_feature_matrix()
-            print('Finished gathering feature matrix')
-
+            if self.in_memory:
+                if not self.data_collected:
+                    self.gather_feature_matrix()
+            else:
+                print('Partial fitting is not supported in VAMPNET')
+                if not self.data_collected:
+                    self.gather_feature_matrix()
+                    
             if not self.symmetrize:
                 self.dataset = MultimerTrajectoriesDataset.from_numpy(
                     self.lag, self.multimer, self.feature_trajectories)
@@ -380,6 +386,8 @@ class VAMPNet_Multimer_Rev_Model(VAMPNet_Multimer, Transformer):
 
 
 class VAMPNet_Multimer_Rev(VAMPNet_Multimer, Transformer, DLEstimatorMixin):
+    prefix = "rev_vampnet"
+
     _MUTABLE_INPUT_DATA = True
 
     def __init__(self,
@@ -1972,4 +1980,3 @@ class VAMPNet_Multimer_Rev(VAMPNet_Multimer, Transformer, DLEstimatorMixin):
         self.load_state_dict(dicts['dict_lobe'].item(), dicts['dict_u'].item(), dicts['dict_s'].item(), cg_dicts=cg_dicts, mask_dict=mask_dict)
         
         return
-        
