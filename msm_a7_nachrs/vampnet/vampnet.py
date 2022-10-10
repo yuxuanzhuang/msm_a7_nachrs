@@ -28,11 +28,12 @@ from copy import deepcopy
 from typing import Optional, Union, Callable, Tuple
 from deeptime.decomposition.deep import vampnet_loss, vamp_score
 from deeptime.util.torch import disable_TF32, map_data, multi_dot
+from sklearn import preprocessing
 
 class VAMPNETInitializer(MSMInitializer):
     prefix = "vampnet"
 
-    def start_analysis(self):
+    def start_analysis(self, logistic=False):
         os.makedirs(self.filename, exist_ok=True)
 
         if (not os.path.isfile(self.filename + 'vampnet.pyemma')) or self.updating:
@@ -45,6 +46,20 @@ class VAMPNETInitializer(MSMInitializer):
                 if not self.data_collected:
                     self.gather_feature_matrix()
                     
+            if logistic:
+                n_feats = sum([len(feat) for feat in self.feature_input_info_list])
+
+                scalers = [preprocessing.MinMaxScaler(feature_range=(-5, 5)) for i in range(n_feats)]
+                for traj in self.feature_trajectories:
+                    [scalers[i].partial_fit(np.asarray(traj.T[i]).T) for i in range(n_feats)]
+
+                for traj_ind, traj in enumerate(self.feature_trajectories):
+                    scaled_traj = np.asarray([scalers[i].transform(np.asarray(traj.T[i]).T) for i in range(n_feats)])
+                    log_traj = 1 / (1 + np.exp(-scalered_traj))
+                    assert log_traj.shape == traj.shape
+                    self.feature_trajectories[traj_ind] = log_traj
+
+
             if not self.symmetrize:
                 self.dataset = MultimerTrajectoriesDataset.from_numpy(
                     self.lag, self.multimer, self.feature_trajectories)
@@ -164,6 +179,7 @@ class VAMPNet_Multimer(VAMPNet):
         self.multimer = multimer
         self.n_states = n_states
 
+        """
         try:
             if self.multimer != self.lobe.module.multimer:
                 raise ValueError('Mismatch multimer between vampnet and lobe')
@@ -174,7 +190,8 @@ class VAMPNet_Multimer(VAMPNet):
                 raise ValueError('Mismatch multimer between vampnet and lobe')
             if self.n_states != self.lobe.n_states:
                 raise ValueError('Mismatch multimer between vampnet and lobe')
-
+        """
+        
     def partial_fit(self, data, train_score_callback: Callable[[
                     int, torch.Tensor], None] = None, tb_writer=None):
         if self.dtype == np.float32:

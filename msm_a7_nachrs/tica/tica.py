@@ -121,6 +121,7 @@ class TICAInitializer(MSMInitializer):
 
                 feature_trajectory = np.concatenate(feature_trajectory, axis=2).reshape(raw_data.shape[0], -1)
                 if (ind+1) % block_size == 0:
+                    feature_trajectories.append(feature_trajectory)
                     dataset = MultimerTrajectoriesDataset.from_numpy(
                         self.lag, self.multimer, feature_trajectories)
                     self.tica.partial_fit(dataset)

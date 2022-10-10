@@ -145,7 +145,6 @@ class MSMInitializer(object):
         self.feature_type_list.append(feat_type)
         print(
             f'added feature selection {feature_selected} type: {feat_type}, # of features: {len(self.feature_input_info_list[-1])}')
-
     
     def gather_feature_matrix(self):
         """load feature matrix into memory"""
