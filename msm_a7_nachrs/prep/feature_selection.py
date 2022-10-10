@@ -124,87 +124,27 @@ class get_domain_interdistance(DaskChunkMdanalysis):
 
         result = []
         for ts in universe.trajectory[start:stop:step]:
-            r_ts = []
+            domain_ag_c_gom_list = np.zeros(domain_ag_list.shape + (3,))
+            for i, domain_ag in np.ndenumerate(domain_ag_list):
+                domain_ag_c_gom_list[i] = domain_ag.center_of_geometry()
+            
+            ag_gom_list1 = []
+            ag_gom_list2 = []
             for feature_chain in [[0, 1, 2], [1, 2, 3],
                                   [2, 3, 4], [3, 4, 0], [4, 0, 1]]:
                 for domain_ag1, domain_ag2 in itertools.product(
-                        domain_ag_list[feature_chain[0]], domain_ag_list[feature_chain].ravel()):
-                    if domain_ag1 != domain_ag2:
-                        r_ts.append(calc_bonds(domain_ag1.center_of_geometry(),
-                                               domain_ag2.center_of_geometry()))
-            result.append(r_ts)
-
-        return result
-
-
-class get_domain_inverse_interdistance(DaskChunkMdanalysis):
-    name = 'domain_inverse_distance'
-
-    def set_feature_info(self, universe):
-        domain_info_list = []
-        for domain_name, selection in domain_dict.items():
-            for domain_subunit in universe.select_atoms(
-                    selection).split('segment'):
-                domain_info_list.append(
-                    domain_name + '_' + domain_subunit.segids[0] + '_pos')
-
-        domain_info_list = np.asarray(
-            domain_info_list, dtype=object).reshape(
-            len(domain_dict), 5).T
-
-        feature_info = []
-        for feature_chain in [[0, 1, 2], [1, 2, 3],
-                              [2, 3, 4], [3, 4, 0], [4, 0, 1]]:
-            for d1_inf, d2_inf in itertools.product(
-                    domain_info_list[feature_chain[0]],
-                    domain_info_list[feature_chain].ravel()):
-                if d1_inf != d2_inf:
-                    feature_info.append('_'.join([d1_inf, d2_inf]))
-
-        return feature_info
-
-    def run_analysis(self, universe, start, stop, step):
-        domain_ag_list = []
-        domain_info_list = []
-        for domain_name, selection in domain_dict.items():
-            for domain_subunit in universe.select_atoms(
-                    selection).split('segment'):
-                domain_ag_list.append(domain_subunit)
-                domain_info_list.append(
-                    domain_name + '_' + domain_subunit.segids[0] + '_pos')
-
-        domain_ag_list = np.asarray(
-            domain_ag_list, dtype=object).reshape(
-            len(domain_dict), 5).T
-        domain_info_list = np.asarray(
-            domain_info_list, dtype=object).reshape(
-            len(domain_dict), 5).T
-
-        self._feature_info = []
-        for feature_chain in [[0, 1, 2], [1, 2, 3],
-                              [2, 3, 4], [3, 4, 0], [4, 0, 1]]:
-            for d1_inf, d2_inf in itertools.product(
-                    domain_info_list[feature_chain[0]], domain_info_list[feature_chain].ravel()):
-                if d1_inf != d2_inf:
-                    self._feature_info.append('_'.join([d1_inf, d2_inf]))
-
-        result = []
-        for ts in universe.trajectory[start:stop:step]:
-            r_ts = []
-            for feature_chain in [[0, 1, 2], [1, 2, 3],
-                                  [2, 3, 4], [3, 4, 0], [4, 0, 1]]:
-                for domain_ag1, domain_ag2 in itertools.product(
-                        domain_ag_list[feature_chain[0]], domain_ag_list[feature_chain].ravel()):
-                    if domain_ag1 != domain_ag2:
-                        r_ts.append(1.0 / calc_bonds(domain_ag1.center_of_geometry(),
-                                                     domain_ag2.center_of_geometry()))
-            result.append(r_ts)
+                        domain_ag_c_gom_list[feature_chain[0]], domain_ag_c_gom_list[feature_chain].reshape(-1, 3)):
+                    if (domain_ag1 != domain_ag2).any():
+                        ag_gom_list1.append(domain_ag1)
+                        ag_gom_list2.append(domain_ag2)
+            r_ts = calc_bonds(np.vstack(ag_gom_list1), np.vstack(ag_gom_list2))
+            result.append(list(r_ts))
 
         return result
 
 
 class get_domain_intradistance(DaskChunkMdanalysis):
-    name = 'domain_inverse_intra_distance'
+    name = 'domain_intra_distance'
 
     def set_feature_info(self, universe):
         domain_info_list = []
@@ -240,14 +180,21 @@ class get_domain_intradistance(DaskChunkMdanalysis):
 
         result = []
         for ts in universe.trajectory[start:stop:step]:
-            r_ts = []
+
+            domain_ag_c_gom_list = np.zeros(domain_ag_list.shape + (3,))
+            for i, domain_ag in np.ndenumerate(domain_ag_list):
+                domain_ag_c_gom_list[i] = domain_ag.center_of_geometry()
+            
+            ag_gom_list1 = []
+            ag_gom_list2 = []
             for feature_chain in range(5):
                 for domain_ag1, domain_ag2 in itertools.product(
-                        domain_ag_list[feature_chain], domain_ag_list[feature_chain].ravel()):
-                    if domain_ag1 != domain_ag2:
-                        r_ts.append(1.0 / calc_bonds(domain_ag1.center_of_geometry(),
-                                                     domain_ag2.center_of_geometry()))
-            result.append(r_ts)
+                        domain_ag_c_gom_list[feature_chain], domain_ag_c_gom_list[feature_chain].reshape(-1, 3)):
+                    if (domain_ag1 != domain_ag2).any():
+                        ag_gom_list1.append(domain_ag1)
+                        ag_gom_list2.append(domain_ag2)
+            r_ts = calc_bonds(np.vstack(ag_gom_list1), np.vstack(ag_gom_list2))
+            result.append(list(r_ts))
 
         return result
 
