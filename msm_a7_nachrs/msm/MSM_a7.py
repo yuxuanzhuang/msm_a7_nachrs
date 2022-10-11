@@ -85,6 +85,7 @@ class MSMInitializer(object):
                  md_dataframe,
                  lag,
                  start=0,
+                 end=-1,
                  multimer=5,
                  symmetrize=True,
                  updating=True,
@@ -99,6 +100,7 @@ class MSMInitializer(object):
         # lag for # of frames
         self.lag = lag
         self.start = start
+        self.end = end
         self.multimer = multimer
         self.symmetrize = symmetrize
         self.updating = updating
@@ -118,7 +120,8 @@ class MSMInitializer(object):
             self.md_data.traj_time[1] - self.md_data.traj_time[0]) / 1000 * self.interval
         print(f'lag time is {self.lag * self.dt} ns')
         print(f'start time is {self.start * self.dt} ns')
-
+        if self.end != -1:
+            print(f'end time is {self.end * self.dt} ns')
 
         self.feature_input_list = []
         self.feature_input_info_list = []
@@ -126,7 +129,6 @@ class MSMInitializer(object):
         self.feature_type_list = []
 
         os.makedirs(self.filename, exist_ok=True)
-
 
 
     def add_feature(self, feature_selected, excluded_indices=[], feat_type='subunit'):
@@ -157,7 +159,11 @@ class MSMInitializer(object):
                                                    self.feature_input_indice_list,
                                                    self.feature_type_list):
                 raw_data = np.load(feat_loc, allow_pickle=True)
-                raw_data = raw_data.reshape(raw_data.shape[0], -1)[self.start:, indice]
+                if self.end == -1:
+                    end = raw_data.shape[0]
+                else:
+                    end = self.end
+                raw_data = raw_data.reshape(raw_data.shape[0], -1)[self.start:end, indice]
                 if feat_type == 'global':
                     # repeat five times
                     raw_data = np.repeat(raw_data, 5, axis=1).reshape(raw_data.shape[0], -1, 5).transpose(0, 2, 1)
@@ -297,8 +303,12 @@ class MSMInitializer(object):
 
         for sys, df in md_data.groupby(['system']):
             if sys not in self.system_exclusion:
+                if self.end == -1:
+                    end = df.index[-1]
+                else:
+                    end = df[df.frame < self.end].index[-1]
                 sys_data = raw_data[df.index[0] +
-                                    self.start:df.index[-1] + 1, :]
+                                    self.start:end + 1, :]
                 total_shape = sys_data.shape[1]
                 per_shape = int(total_shape / 5)
 
@@ -344,7 +354,10 @@ class MSMInitializer(object):
         else:
             feature_list_str = '__'.join([f'{feature}_{len(feat_n)}' for feature, feat_n in zip(self.feature_input_list, self.feature_input_info_list)])
 
-        return f'{self.md_dataframe.filename}/msmfile/{self.prefix}/{self.lag}/{feature_list_str}/'
+        if self.end == -1:
+            return f'{self.md_dataframe.filename}/msmfile/{self.prefix}/{self.lag}/{self.start}/{feature_list_str}/'
+        else:
+            return f'{self.md_dataframe.filename}/msmfile/{self.prefix}/{self.lag}/{self.start}_{self.end}/{feature_list_str}/'
 
     @property
     def cluster_filename(self):

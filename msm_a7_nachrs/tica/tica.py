@@ -135,10 +135,13 @@ class TICAInitializer(MSMInitializer):
                 self.lag, self.multimer, feature_trajectories)
             self.tica.partial_fit(dataset)
 
-    def transform_feature_trajectories(self, md_dataframe, start=0):
+    def transform_feature_trajectories(self, md_dataframe, start=0, end=-1):
         """
         Map new feature trajectories to the TICA space.
         """
+        if end == -1:
+            end = md_dataframe.dataframe.shape[0]
+            
         mapped_feature_trajectories = []
         feature_df = md_dataframe.get_feature(self.feature_input_list,
                     in_memory=False)
@@ -148,7 +151,7 @@ class TICAInitializer(MSMInitializer):
                                                    self.feature_input_indice_list,
                                                    self.feature_type_list):
                 raw_data = np.load(feat_loc, allow_pickle=True)
-                raw_data = raw_data.reshape(raw_data.shape[0], -1)[start:, indice]
+                raw_data = raw_data.reshape(raw_data.shape[0], -1)[start:end, indice]
                 if feat_type == 'global':
                     # repeat five times
                     raw_data = np.repeat(raw_data, 5, axis=1).reshape(raw_data.shape[0], -1, 5).transpose(0, 2, 1)
