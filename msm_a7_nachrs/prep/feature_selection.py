@@ -7,6 +7,7 @@ from MDAnalysis.analysis.distances import distance_array
 from MDAnalysis.lib.distances import calc_bonds
 from MDAnalysis.analysis.distances import self_distance_array
 from MDAnalysis.analysis.distances import dist
+from MDAnalysis.core.groups import AtomGroup, ResidueGroup
 
 import MDAnalysis as mda
 import itertools
@@ -333,34 +334,6 @@ class get_c_alpha_distance_10A(DaskChunkMdanalysis):
             result.append(dist(ag1, ag2)[2])
         return result
 
-class get_c_alpha_distance_10A_inverse(DaskChunkMdanalysis):
-    name = 'ca_distance_10A_inverse'
-    
-    def set_feature_info(self, universe):
-        pair_indices_union_df = pd.read_pickle('pair_indices_union_df.pickle')
-        feat_info = []
-        ag1 = universe.atoms[[]]
-        ag2 = universe.atoms[[]]
-        for subunit in range(5):
-            for ind, row in pair_indices_union_df.iterrows():
-                ag1 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a1_chain, row.a1_resid))
-                ag2 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a2_chain, row.a2_resid))
-            pair_indices_union_df = pair_indices_union_df.replace({"a1_chain": subunit_iter_dic})
-            pair_indices_union_df = pair_indices_union_df.replace({"a2_chain": subunit_iter_dic}) 
-            
-        for ca_ag1, ca_ag2 in zip(ag1, ag2):
-            feat_info.append(f'{ca_ag1.segid}_{ca_ag1.resid}_{ca_ag2.segid}_{ca_ag2.resid}_inverse')
-        self.ag1_indices = ag1.indices
-        self.ag2_indices = ag2.indices
-        return feat_info
-
-    def run_analysis(self, universe, start, stop, step):
-        result = []
-        ag1 = universe.atoms[self.ag1_indices]
-        ag2 = universe.atoms[self.ag2_indices]
-        for ts in universe.trajectory[start:stop:step]:
-            result.append(1 / dist(ag1, ag2)[2])
-        return result
 
 
 class get_c_alpha_distance_10A_2diff(DaskChunkMdanalysis):
@@ -392,31 +365,85 @@ class get_c_alpha_distance_10A_2diff(DaskChunkMdanalysis):
             result.append(dist(ag1, ag2)[2])
         return result
 
-class get_c_alpha_distance_10A_inverse_2diff(DaskChunkMdanalysis):
-    name = 'ca_distance_10A_inverse_2diff'
-    
+
+class get_acho_contact_from_92(DaskChunkMdanalysis):
+    name = 'acho_dist_92'
+    universe_file = 'system'
+
     def set_feature_info(self, universe):
-        pair_indices_union_df = pd.read_pickle('pair_indices_union_df_2div.pickle')
-        feat_info = []
-        ag1 = universe.atoms[[]]
-        ag2 = universe.atoms[[]]
-        for subunit in range(5):
-            for ind, row in pair_indices_union_df.iterrows():
-                ag1 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a1_chain, row.a1_resid))
-                ag2 += universe.select_atoms('name CA and segid {} and resid {}'.format(row.a2_chain, row.a2_resid))
-            pair_indices_union_df = pair_indices_union_df.replace({"a1_chain": subunit_iter_dic})
-            pair_indices_union_df = pair_indices_union_df.replace({"a2_chain": subunit_iter_dic}) 
-            
-        for ca_ag1, ca_ag2 in zip(ag1, ag2):
-            feat_info.append(f'{ca_ag1.segid}_{ca_ag1.resid}_{ca_ag2.segid}_{ca_ag2.resid}_inverse')
-        self.ag1_indices = ag1.indices
-        self.ag2_indices = ag2.indices
-        return feat_info
+        return ['acho_dist_92_{}'.format(i) for i in range(5)]
 
     def run_analysis(self, universe, start, stop, step):
+        acho_ag = universe.select_atoms("resname ACHO and name N")
+        protein_ag = universe.select_atoms("name CA and resid 92")
+
         result = []
-        ag1 = universe.atoms[self.ag1_indices]
-        ag2 = universe.atoms[self.ag2_indices]
         for ts in universe.trajectory[start:stop:step]:
-            result.append(1 / dist(ag1, ag2)[2])
+            result.append(dist(acho_ag, protein_ag)[2])
+        return result
+
+class get_acho_dist_from_54(DaskChunkMdanalysis):
+    name = 'acho_dist_54'
+    universe_file = 'system'
+
+    def set_feature_info(self, universe):
+        return ['acho_dist_54_{}'.format(i) for i in range(5)]
+
+    def run_analysis(self, universe, start, stop, step):
+        acho_ag = universe.select_atoms("resname ACHO and name N")
+        protein_ag = universe.select_atoms("name CA and resid 54")
+        protein_ag = AtomGroup(np.roll(protein_ag, -1))
+
+        result = []
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(dist(acho_ag, protein_ag)[2])
+        return result
+
+
+class get_acho_contact_from_92(DaskChunkMdanalysis):
+    name = 'acho_contact_92'
+    universe_file = 'system'
+
+    def set_feature_info(self, universe):
+        return ['acho_contact_92_{}'.format(i) for i in range(5)]
+
+    def run_analysis(self, universe, start, stop, step):
+        acho_ag = universe.select_atoms("resname ACHO").residues
+        protein_ag = universe.select_atoms("protein and resid 92").residues
+
+        result = []
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(np.asarray([np.min(distance_array(acho.atoms, res.atoms)) for acho, res in zip(acho_ag, protein_ag)]))
+        return result
+
+class get_acho_contact_from_54(DaskChunkMdanalysis):
+    name = 'acho_contact_54'
+    universe_file = 'system'
+
+    def set_feature_info(self, universe):
+        return ['acho_contact_54_{}'.format(i) for i in range(5)]
+
+    def run_analysis(self, universe, start, stop, step):
+        acho_ag = universe.select_atoms("resname ACHO").residues
+        protein_ag = universe.select_atoms("protein and resid 92").residues
+
+        result = []
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(np.asarray([np.min(distance_array(acho.atoms, res.atoms)) for acho, res in zip(acho_ag, protein_ag)]))
+        return result
+
+class get_acho_contact_from_187(DaskChunkMdanalysis):
+    name = 'acho_contact_187'
+    universe_file = 'system'
+
+    def set_feature_info(self, universe):
+        return ['acho_contact_187_{}'.format(i) for i in range(5)]
+
+    def run_analysis(self, universe, start, stop, step):
+        acho_ag = universe.select_atoms("resname ACHO").residues
+        protein_ag = universe.select_atoms("protein and resid 187").residues
+
+        result = []
+        for ts in universe.trajectory[start:stop:step]:
+            result.append(np.asarray([np.min(distance_array(acho.atoms, res.atoms)) for acho, res in zip(acho_ag, protein_ag)]))
         return result
