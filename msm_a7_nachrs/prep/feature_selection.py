@@ -425,7 +425,8 @@ class get_acho_contact_from_54(DaskChunkMdanalysis):
 
     def run_analysis(self, universe, start, stop, step):
         acho_ag = universe.select_atoms("resname ACHO").residues
-        protein_ag = universe.select_atoms("protein and resid 92").residues
+        protein_ag = universe.select_atoms("protein and resid 54").residues
+        protein_ag = np.roll(protein_ag, -1)
 
         result = []
         for ts in universe.trajectory[start:stop:step]:
