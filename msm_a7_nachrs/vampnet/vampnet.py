@@ -1,3 +1,4 @@
+import warnings
 from ..msm.MSM_a7 import MSMInitializer
 from ..util.dataloader import MultimerTrajectoriesDataset
 
@@ -165,7 +166,8 @@ class VAMPNet_Multimer(VAMPNet):
                  lobe: nn.Module, lobe_timelagged: Optional[nn.Module] = None,
                  device=None, optimizer: Union[str, Callable] = 'Adam', learning_rate: float = 5e-4,
                  score_method: str = 'VAMP2', score_mode: str = 'regularize', epsilon: float = 1e-6,
-                 dtype=np.float32):
+                 dtype=np.float32,
+                 trained=False):
         super().__init__(lobe,
                          lobe_timelagged,
                          device,
@@ -178,6 +180,7 @@ class VAMPNet_Multimer(VAMPNet):
 
         self.multimer = multimer
         self.n_states = n_states
+        self.trained = trained
 
         """
         try:
@@ -194,6 +197,8 @@ class VAMPNet_Multimer(VAMPNet):
         
     def partial_fit(self, data, train_score_callback: Callable[[
                     int, torch.Tensor], None] = None, tb_writer=None):
+        self.trained = True
+
         if self.dtype == np.float32:
             self._lobe = self._lobe.float()
             self._lobe_timelagged = self._lobe_timelagged.float()
@@ -271,6 +276,28 @@ class VAMPNet_Multimer(VAMPNet):
                     mode=self.score_mode,
                     epsilon=self.epsilon)
                 return score_value
+
+    def transform(self, data, **kwargs):
+        r""" Transforms data with the encapsulated model.
+
+        Parameters
+        ----------
+        data : array_like
+            Input data
+        **kwargs
+            Optional arguments.
+
+        Returns
+        -------
+        output : array_like
+            Transformed data.
+        """
+        if not self.trained:
+            warnings.warn( 'VAMPNet not trained yet. Please call fit first.')
+        model = self.fetch_model()
+        if model is None:
+            raise ValueError("This estimator contains no model yet, fit should be called first.")
+        return model.transform(data, **kwargs)
 
 class VAMPNet_Multimer_Rev_Model(VAMPNet_Multimer, Transformer):
     def __init__(self,

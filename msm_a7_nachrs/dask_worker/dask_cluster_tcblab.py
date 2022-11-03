@@ -47,6 +47,11 @@ try:
     ip_address = ni.ifaddresses('enp195s0')[ni.AF_INET][0]['addr']
 except BaseException:
     pass
+try:
+    ni.ifaddresses('enp194s0')
+    ip_address = ni.ifaddresses('enp194s0')[ni.AF_INET][0]['addr']
+except BaseException:
+    pass
 
 port = 8786
 
