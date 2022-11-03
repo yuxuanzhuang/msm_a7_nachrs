@@ -114,6 +114,7 @@ class MSMInitializer(object):
         self.in_memory = in_memory
         self.data_collected = False
 
+        self.md_dataframe.dataframe = self.md_dataframe.dataframe[self.md_dataframe.dataframe.system.isin(self.system_exclusion) == False].reset_index()
         self.md_data = self.md_dataframe.dataframe
         # dt: ns
         self.dt = (
