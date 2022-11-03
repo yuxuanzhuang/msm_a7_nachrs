@@ -20,6 +20,8 @@ from ..util.utils import *
 from ..datafiles import BGT, EPJ, EPJPNU
 from ..msm.MSM_a7 import MSMInitializer
 from ..util.dataloader import MultimerTrajectoriesDataset, get_symmetrized_data
+from .sym_tica import SymTICA
+
 
 pathways = [
     'BGT_EPJPNU',
@@ -168,54 +170,88 @@ class TICAInitializer(MSMInitializer):
         return mapped_feature_trajectories
 
 
-    def get_correlation(self, feature):
-        md_data = pd.read_pickle(self.feature_file)
+    def get_correlation(self, feature, max_tic=3):
+        """
+        Get the correlation between the feature and the TICA components.
+        """
+        feature_dataframe = self.md_dataframe.get_feature([feature])
 
-        raw_data = np.concatenate([np.load(location, allow_pickle=True)
-                                   for location, df in md_data.groupby(feature, sort=False)])
-
-        md_data = md_data[md_data.pathway.isin(self.pathways)]
-
-        feature_data = []
-
-        for sys, df in md_data.groupby(['system']):
-            if sys not in self.system_exclusion:
-                sys_data = raw_data[df.index[0] +
-                                    self.start:df.index[-1] + 1, :]
-                total_shape = sys_data.shape[1]
-                per_shape = int(total_shape / 5)
-
-                #  symmetrization of features
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], 5, per_shape),
-                                            0, axis=1).reshape(sys_data.shape[0], total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], 5, per_shape),
-                                            1, axis=1).reshape(sys_data.shape[0], total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], 5, per_shape),
-                                            2, axis=1).reshape(sys_data.shape[0], total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], 5, per_shape),
-                                            3, axis=1).reshape(sys_data.shape[0], total_shape))
-                feature_data.append(np.roll(sys_data.reshape(sys_data.shape[0], 5, per_shape),
-                                            4, axis=1).reshape(sys_data.shape[0], total_shape))
-
-        feature_data_concat = np.concatenate(feature_data)
-
-        max_tic = 20
-        test_feature_TIC_correlation = np.zeros(
-            (feature_data_concat.shape[1], max_tic))
-
+        feature_data_concat = feature_dataframe[feature_dataframe.traj_time >= self.start \
+        * self.dt * 1000].iloc[:, 4:].values
+        tica_concat = np.concatenate([tica_traj[:, :max_tic] for tica_traj in \
+        self.tica_output[::5]], axis=0)
+        test_feature_TIC_correlation = np.zeros((feature_data_concat.shape[1], max_tic))
         for i in range(feature_data_concat.shape[1]):
             for j in range(max_tic):
                 test_feature_TIC_correlation[i, j] = pearsonr(
-                    feature_data_concat[:, i],
-                    self.tica_concatenated[:, j])[0]
+                    feature_data_concat[:, i], tica_concat[:, j])[0]
 
-        feature_info = np.load(
-            './analysis_results/' +
-            feature +
-            '_feature_info.npy')
+        test_feature_TIC_correlation_df = pd.DataFrame(
+            test_feature_TIC_correlation,
+            columns=['TIC' + str(i) for i in range(1, max_tic + 1)],
+            index=feature_dataframe.columns[4:])
 
-        del feature_data
+        del feature_dataframe
         del feature_data_concat
         gc.collect()
 
+        return test_feature_TIC_correlation_df
+
+
+
         return test_feature_TIC_correlation, feature_info
+
+
+class SymTICAInitializer(TICAInitializer):
+    prefix = "sym_tica"
+
+    def start_analysis(self, block_size=10):
+        os.makedirs(self.filename, exist_ok=True)
+        if (not os.path.isfile(self.filename + 'sym_tica.pickle')) or self.updating:
+            print('Start new Sym TICA analysis')
+            if self.in_memory:
+                if not self.data_collected:
+                    self.gather_feature_matrix()
+
+                self.tica = SymTICA(symmetry_fold=self.multimer,
+                            var_cutoff=0.8, lagtime=self.lag)
+                self.tica.fit(self.feature_trajectories)
+                pickle.dump(self.tica,
+                open(
+                    self.filename +
+                    'sym_tica.pickle',
+                    'wb'))
+                self.tica_output = [self.tica.transform(feature_traj) for feature_traj in self.feature_trajectories]
+
+            else:
+                self.tica = SymTICA(symmetry_fold=self.multimer,
+                            var_cutoff=0.8, lagtime=self.lag)
+                self.partial_fit_tica(block_size=block_size)
+                _ = self.tica.fetch_model()
+                pickle.dump(self.tica,
+                open(
+                    self.filename +
+                    'sym_tica.pickle',
+                    'wb'))
+                self.tica_output = self.transform_feature_trajectories(self.md_dataframe,
+                                        start=self.start)
+
+            self.tica_concatenated = np.concatenate(self.tica_output)
+
+            pickle.dump(
+                self.tica_output,
+                open(
+                    self.filename +
+                    'output.pickle',
+                    'wb'))
+#            if self.in_memory:
+#                self.dump_feature_trajectories()
+            gc.collect()
+
+        else:
+            print('Load old sym TICA results')
+            self.tica = pickle.load(
+                open(self.filename + 'sym_tica.pickle', 'rb'))
+            self.tica_output = pickle.load(
+                open(self.filename + 'output.pickle', 'rb'))
+            self.tica_concatenated = np.concatenate(self.tica_output)
