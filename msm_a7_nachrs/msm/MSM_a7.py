@@ -95,6 +95,7 @@ class MSMInitializer(object):
                  prefix=None,
                  in_memory=True):
 
+        #TODO: Add deepcopy to datarfame
         self.md_dataframe = md_dataframe
 
         # lag for # of frames
@@ -113,6 +114,7 @@ class MSMInitializer(object):
             self.prefix=prefix
         self.in_memory = in_memory
         self.data_collected = False
+
 
         self.md_dataframe.dataframe = self.md_dataframe.dataframe[self.md_dataframe.dataframe.system.isin(self.system_exclusion) == False].reset_index()
         self.md_data = self.md_dataframe.dataframe

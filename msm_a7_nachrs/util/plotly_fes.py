@@ -24,7 +24,7 @@ def generate_tica_csv(
     output: str
     """
     plotly_tica_output = msm_obj.transform_feature_trajectories(md_dataframe)
-    plotly_df = md_dataframe.dataframe
+    plotly_df = md_dataframe.dataframe.copy()
 
     plotly_tica_concatenated = np.concatenate(plotly_tica_output[::5])
     plotly_df[sel_tic1] = plotly_tica_concatenated[:, 0]
