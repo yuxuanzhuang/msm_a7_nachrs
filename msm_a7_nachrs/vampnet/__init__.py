@@ -10,6 +10,10 @@ from .vampnet import (
             VAMPNet_Multimer,
             VAMPNet_Multimer_Rev_Model,
             VAMPNet_Multimer_Rev,
+            VAMPNet_Multimer_NOSYM
             )
 
-from .srv import VAMPNet_Multimer_Sym
+from .srv import (
+            VAMPNet_Multimer_Sym,
+            VAMPNet_Multimer_Sym_NOSYM
+            )
