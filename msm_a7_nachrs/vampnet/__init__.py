@@ -8,9 +8,13 @@ from .vampnet import (
             VAMPNETInitializer,
             MultimerNet,
             VAMPNet_Multimer,
+
+            VAMPNet_Multimer_NOSYM
+            )
+
+from .vampnet_rev import (
             VAMPNet_Multimer_Rev_Model,
             VAMPNet_Multimer_Rev,
-            VAMPNet_Multimer_NOSYM
             )
 
 from .srv import (

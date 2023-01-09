@@ -87,3 +87,24 @@ equilibration_dic = {'traj_note': traj_notes,
 
 climber_dic = {'traj_note': ['BGT_EPJPNU', 'BGT_EPJ', 'EPJ_EPJPNU', 'EPJ_BGT', 'EPJPNU_BGT', 'EPJPNU_EPJ'],
                'load_location': ["".join(i) for i in itertools.product([pwd + '/../Climber/'], ['BGT_EPJPNU', 'BGT_EPJ', 'EPJ_EPJPNU', 'EPJ_BGT', 'EPJPNU_BGT', 'EPJPNU_EPJ'])]}
+
+
+import contextlib
+import joblib
+from tqdm import tqdm
+
+@contextlib.contextmanager
+def tqdm_joblib(tqdm_object):
+    """Context manager to patch joblib to report into tqdm progress bar given as argument"""
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        tqdm_object.close()

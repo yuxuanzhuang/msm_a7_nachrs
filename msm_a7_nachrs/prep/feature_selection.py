@@ -39,6 +39,16 @@ domain_dict = {
     'pro_loop': '(resid 129 to 137)'
 }
 
+pore_annotation_prime = {
+            '-1': '(resid 237 and resname GLU)',
+            '2': '(resid 240 and resname SER)',
+            '6': '(resid 244 and resname THR)',
+            '9':  '(resid 247 and resname LEU)',
+            '13': '(resid 251 and resname VAL)',
+            '16': '(resid 254 and resname LEU)',
+            '20': '(resid 258 and resname GLU)'
+}
+
 
 class get_domain_position(DaskChunkMdanalysis):
     name = 'domain_position'
@@ -303,6 +313,25 @@ class get_pore_hydration(DaskChunkMdanalysis):
             n_hydration.append(pore_hydrat_n.n_atoms)
         return n_hydration
 
+class get_pore_hydration_prime(DaskChunkMdanalysis):
+    name = 'pore_hydration_prime'
+    universe_file = 'system'
+
+    def set_feature_info(self, universe):
+        feats = []
+        for annotation, sel in pore_annotation_prime.items():
+            feats.append(annotation)
+        return feats
+
+    def run_analysis(self, universe, start, stop, step):
+        pore_hydrat_ags = [universe.select_atoms(
+            f"(cyzone 9 2 -2 {selection}) and resname TIP3 and name OH2", updating=True)
+            for annotation, selection in pore_annotation_prime.items()]
+
+        n_hydration = []
+        for ts in universe.trajectory[start:stop:step]:
+            n_hydration.append([pore_hydrat_ag.n_atoms for pore_hydrat_ag in pore_hydrat_ags])
+        return n_hydration
 
 
 class get_c_alpha_distance_10A(DaskChunkMdanalysis):
@@ -447,4 +476,24 @@ class get_acho_contact_from_187(DaskChunkMdanalysis):
         result = []
         for ts in universe.trajectory[start:stop:step]:
             result.append(np.asarray([np.min(distance_array(acho.atoms, res.atoms)) for acho, res in zip(acho_ag, protein_ag)]))
+        return result
+
+class get_chol_contact_from_253(DaskChunkMdanalysis):
+    name = 'chol_contact_253'
+    universe_file = 'system'
+    output = 'object'
+
+    def set_feature_info(self, universe):
+        return ['chol_contact_253_{}'.format(i) for i in range(5)]
+
+    def run_analysis(self, universe, start, stop, step):
+        chl1_ag = universe.select_atoms("resname CHL1").residues
+        protein_ag = universe.select_atoms("protein and resid 253").residues
+
+        result = []
+        for ts in universe.trajectory[start:stop:step]:
+            result_ts = []
+            for res in protein_ag:
+                result_ts.append(np.asarray([[chl1.resid, np.min(distance_array(chl1.atoms, res.atoms))] for chl1 in chl1_ag]))
+            result.append(result_ts)
         return result
