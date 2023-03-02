@@ -11,6 +11,11 @@ from deeptime.util.validation import implied_timescales, ck_test
 from joblib import Parallel, delayed
 import pickle
 from scipy.stats import pearsonr
+from pydantic import BaseModel
+from datetime import datetime
+from copy import copy, deepcopy
+
+from typing import List, Optional
 
 import gc
 import itertools
@@ -102,8 +107,7 @@ class MSMInitializer(object):
                  prefix=None,
                  in_memory=True):
 
-        #TODO: Add deepcopy to datarfame
-        self.md_dataframe = md_dataframe
+        self.md_dataframe = deepcopy(md_dataframe)
 
         # lag for # of frames
         self.lag = lag
@@ -126,7 +130,19 @@ class MSMInitializer(object):
         self.rerun_msm = False
 
 
-        self.md_dataframe.dataframe = self.md_dataframe.dataframe[self.md_dataframe.dataframe.system.isin(self.system_exclusion) == False].reset_index()
+        self.md_dataframe.dataframe = self.md_dataframe.dataframe[self.md_dataframe.dataframe.system.isin(self.system_exclusion) == False].reset_index(drop=True)
+        system_array = self.md_dataframe.dataframe.system.to_numpy()
+
+        def fill_missing_values(system_array):
+            diff_arr = (np.diff(system_array, prepend=0) != 0) & (np.diff(system_array, prepend=0) != 1)
+            if all(diff_arr == False):
+                return system_array
+            start_index_update = np.arange(system_array.shape[0])[diff_arr][0]
+            system_array[start_index_update:] = system_array[start_index_update:] -1
+            return fill_missing_values(system_array)
+        
+        system_array = fill_missing_values(system_array)
+        self.md_dataframe.dataframe.system = system_array
         self.md_data = self.md_dataframe.dataframe
         # dt: ns
         self.dt = (
@@ -227,7 +243,11 @@ class MSMInitializer(object):
         if not self.data_collected:
             self.gather_feature_matrix()
 
-    def clustering_with_deeptime(self, meaningful_tic, n_clusters, updating=False):
+    def clustering_with_deeptime(self, meaningful_tic,
+                                 n_clusters, updating=False,
+                                 max_iter=1000):
+        if self.tica_output is None:
+            raise ValueError('TICA output not available')
         self.n_clusters = n_clusters
         self.meaningful_tic = meaningful_tic
         self.tica_output_filter = [
@@ -239,8 +259,9 @@ class MSMInitializer(object):
             print('Start new cluster analysis')
             self.rerun_msm = True
             self.kmean = KMeans(
-                n_clusters=self.n_clusters,  # place 100 cluster centers
-                init_strategy='kmeans++',  # uniform initialization strategy
+                n_clusters=self.n_clusters,
+                init_strategy='kmeans++',
+                max_iter=max_iter,
                 n_jobs=24,
                 progress=tqdm)
             self.cluster = self.kmean.fit(self.tica_output_filter).fetch_model()
@@ -322,13 +343,13 @@ class MSMInitializer(object):
             counts = TransitionCountEstimator(lagtime=lagtime, count_mode='effective').fit_fetch(cluster_dtrajs)
             return BayesianMSM(n_samples=n_samples).fit_fetch(counts)
     
-    def get_its(self, cluster='deeptime', n_samples=1000, n_jobs=10, updating=False):
+    def get_its(self, cluster='deeptime', lag_max=200, n_samples=1000, n_jobs=10, updating=False):
 
         if cluster == 'deeptime':
             if not (os.path.isfile(self.cluster_filename +
                     f'_deeptime_its_{n_samples}.pickle')) or updating or self.rerun_msm:
                 print('Start new ITS analysis')
-                lagtimes = np.linspace(1, 200 / self.dt, 10).astype(int)
+                lagtimes = np.linspace(1, lag_max / self.dt, 10).astype(int)
 
                 if n_jobs != 1:
                     with tqdm_joblib(tqdm(desc="ITS", total=10)) as progress_bar:
@@ -374,7 +395,7 @@ class MSMInitializer(object):
             self.its = pyemma.msm.its(
                 self.cluster_dtrajs,
                 lags=int(
-                    200 / self.dt),
+                    lag_max / self.dt),
                 nits=10,
                 errors='bayes',
                 only_timescales=True)
@@ -391,15 +412,17 @@ class MSMInitializer(object):
         plt.show()
 
         
-    def get_ck_test(self, n_states, lag, mlags=6, n_jobs=6, n_samples=100, updating=False):
+    def get_ck_test(self, n_states, lag, mlags=6, n_jobs=6, n_samples=20, updating=False):
         if not (os.path.isfile(self.cluster_filename +
                 f'_deeptime_cktest.pickle')) or updating or self.rerun_msm:
             print('CK models building')
 
             lagtimes = np.arange(1, mlags+1) * lag
 
+            print('Estimating lagtimes', lagtimes)
+
             if n_jobs != 1:
-                with tqdm_joblib(tqdm(desc="ITS", total=10)) as progress_bar:
+                with tqdm_joblib(tqdm(desc="ITS", total=len(lagtimes))) as progress_bar:
                     models = Parallel(n_jobs=n_jobs)(delayed(self.bayesian_msm_from_traj)(self.cluster_dtrajs,
                                                                 lagtime, n_samples) for lagtime in lagtimes)
             else:
@@ -411,7 +434,7 @@ class MSMInitializer(object):
             print('Start CK test')
             if (n_states, lag) not in self.ck_test:
                 self.ck_test[n_states, lag] = {
-                        'ck_test': models.cktest(models, n_states, progress=tqdm),
+                        'ck_test': models[0].ck_test(models, n_states, progress=tqdm),
                         'models': models
                 }
             pickle.dump(
@@ -428,7 +451,7 @@ class MSMInitializer(object):
                     f'_deeptime_cktest.pickle',
                     'rb'))
             
-        return plot_ck_test(self.ck_test[n_states])
+        return plot_ck_test(self.ck_test[n_states, lag]['ck_test'])
 
 
     def get_maximum_likelihood_msm(self, lag, cluster='deeptime', updating=False):
@@ -495,14 +518,20 @@ class MSMInitializer(object):
                     pi_samples.append(stationary_distribution(sample.transition_matrix))
                     traj_weights_samples.append(sample.compute_trajectory_weights(self.cluster_dtrajs))
 
-                self.pi_samples = np.array(pi_samples, dtype=np.object)
-                self.traj_weights_samples = np.array(traj_weights_samples, dtype=np.object)
+                self.pi_samples = np.array(pi_samples, dtype=object)
+                self.traj_weights_samples = np.array(traj_weights_samples, dtype=object)
 
                 self.stationary_distribution = np.mean(self.pi_samples, axis=0)
                 self.pi = self.stationary_distribution
                 self.trajectory_weights = np.mean(self.traj_weights_samples, axis=0)
 
 
+                pickle.dump(
+                        self.counts,
+                        open(
+                            self.cluster_filename +
+                            f'_deeptime_bayesian_counts_{lag}.pickle',
+                            'wb'))
                 pickle.dump(
                         self.msm,
                         open(
@@ -518,6 +547,11 @@ class MSMInitializer(object):
                             
             else:
                 print('Loading old MSM analysis')
+                self.counts = pickle.load(
+                    open(
+                        self.cluster_filename +
+                        f'_deeptime_bayesian_counts_{lag}.pickle',
+                        'rb'))
                 self.msm = pickle.load(
                     open(
                         self.cluster_filename +
@@ -528,6 +562,21 @@ class MSMInitializer(object):
                         self.cluster_filename +
                         f'_deeptime_bayesian_msm_model_{lag}.pickle',
                         'rb'))
+
+                from deeptime.markov.tools.analysis import stationary_distribution
+
+                pi_samples = []
+                traj_weights_samples = []
+                for sample in self.msm_model.samples:
+                    pi_samples.append(stationary_distribution(sample.transition_matrix))
+                    traj_weights_samples.append(sample.compute_trajectory_weights(self.cluster_dtrajs))
+
+                self.pi_samples = np.array(pi_samples, dtype=object)
+                self.traj_weights_samples = np.array(traj_weights_samples, dtype=object)
+
+                self.stationary_distribution = np.mean(self.pi_samples, axis=0)
+                self.pi = self.stationary_distribution
+                self.trajectory_weights = np.mean(self.traj_weights_samples, axis=0)
 
         elif cluster == 'pyemma':
             self.msm_model = pyemma.msm.bayesian_markov_model(
@@ -553,3 +602,18 @@ class MSMInitializer(object):
         return self.filename + 'cluster' + \
             str(self.n_clusters) + '_tic' + \
             '_'.join([str(m_tic) for m_tic in self.meaningful_tic]) + '_'
+
+
+class MSMMetaData(BaseModel):
+    create_time: Optional[datetime] = None
+    id: int = 0
+    name = 'MSM'
+    lag: int
+    start: int
+    end: int
+    multimer: int
+    symmetrize: bool
+    system_exclusion: Optional[List[int]] = []
+    interval: int
+    prefix: Optional[str] = None
+    feature_input_info_list: Optional[List[str]] = []

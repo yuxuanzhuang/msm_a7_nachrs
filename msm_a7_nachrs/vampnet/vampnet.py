@@ -34,7 +34,7 @@ from sklearn import preprocessing
 class VAMPNETInitializer(MSMInitializer):
     prefix = "vampnet"
 
-    def start_analysis(self, logistic=False):
+    def start_analysis(self):
         os.makedirs(self.filename, exist_ok=True)
 
         if (not os.path.isfile(self.filename + 'vampnet.pyemma')) or self.updating:
@@ -47,19 +47,6 @@ class VAMPNETInitializer(MSMInitializer):
                 if not self.data_collected:
                     self.gather_feature_matrix()
                     
-            if logistic:
-                n_feats = sum([len(feat) for feat in self.feature_input_info_list])
-
-                scalers = [preprocessing.MinMaxScaler(feature_range=(-5, 5)) for i in range(n_feats)]
-                for traj in self.feature_trajectories:
-                    [scalers[i].partial_fit(np.asarray(traj.T[i]).T) for i in range(n_feats)]
-
-                for traj_ind, traj in enumerate(self.feature_trajectories):
-                    scaled_traj = np.asarray([scalers[i].transform(np.asarray(traj.T[i]).T) for i in range(n_feats)])
-                    log_traj = 1 / (1 + np.exp(-scalered_traj))
-                    assert log_traj.shape == traj.shape
-                    self.feature_trajectories[traj_ind] = log_traj
-
             #self.dataset = MultimerTrajectoriesDataset.from_numpy(
             #    self.lag, self.multimer, self.feature_trajectories)
 
@@ -377,10 +364,6 @@ class VAMPNet_Multimer_Aug(VAMPNet):
 
         x_0 = self.lobe(batch_0)
         x_t = self.lobe_timelagged(batch_t)
-
-        # x_0_aug = torch.concat([torch.roll(x_0, self.n_states * i, 1) for i in range(self.multimer)])
-        # x_t_aug = torch.concat([torch.roll(x_t, self.n_states * i, 1) for i in range(self.multimer)])
-#        loss_value = vampnet_loss(x_0_aug, x_t_aug, method=self.score_method, epsilon=self.epsilon, mode=self.score_mode)
 
         loss_value = vampnet_loss(
             x_0,
