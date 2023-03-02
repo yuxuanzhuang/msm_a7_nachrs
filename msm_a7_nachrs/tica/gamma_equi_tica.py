@@ -16,7 +16,7 @@ from deeptime.numeric import spd_inv_split, eig_corr
 from deeptime.util.types import to_dataset
 
 
-class SymVAMP(VAMP):
+class GAMMA_EQUI_VAMP(VAMP):
     r"""Variational approach for Markov processes (VAMP) with a symmetric observable transform.
     """
 
@@ -48,9 +48,9 @@ class SymVAMP(VAMP):
                              f"be divisible by symmetry_fold {symmetry_fold}.")
 
         subset_rank = covariances.cov_00.shape[0] // symmetry_fold
-        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
-        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
-        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+        cov_00 = covariances.cov_00
+        cov_0t = covariances.cov_0t
+        cov_tt = covariances.cov_tt
 
         L0 = spd_inv_split(cov_00, epsilon=epsilon)
         rank0 = L0.shape[1] if L0.ndim == 2 else 1
@@ -73,7 +73,7 @@ class SymVAMP(VAMP):
             U *= s[np.newaxis, 0:m]  # scaled left singular functions induce a kinetic map
             V *= s[np.newaxis, 0:m]  # scaled right singular functions induce a kinetic map wrt. backward propagator
 
-        return SymVAMP._DiagonalizationResults(
+        return GAMMA_EQUI_VAMP._DiagonalizationResults(
             rank0=rank0, rankt=rankt, singular_values=singular_values, left_singular_vecs=U, right_singular_vecs=V
         )
 
@@ -81,7 +81,7 @@ class SymVAMP(VAMP):
 
         decomposition = self._decomposition(covariances, self.epsilon, self.scaling, self.dim, self.var_cutoff,
                                             self.symmetry_fold)
-        return SymCovarianceKoopmanModel(
+        return GAMMA_EQUI_CovarianceKoopmanModel(
             self.symmetry_fold,
             decomposition.left_singular_vecs, decomposition.singular_values, decomposition.right_singular_vecs,
             rank_0=decomposition.rank0, rank_t=decomposition.rankt, dim=self.dim,
@@ -90,11 +90,11 @@ class SymVAMP(VAMP):
             timelagged_obs=self.observable_transform
         )
 
-    def fetch_model(self) -> 'SymCovarianceKoopmanModel':
+    def fetch_model(self) -> 'GAMMA_EQUI_CovarianceKoopmanModel':
         r""" Finalizes current model and yields new :class:`SymCovarianceKoopmanModel`.
         Returns
         -------
-        model : SymCovarianceKoopmanModel
+        model : GAMMA_EQUI_CovarianceKoopmanModel
             The estimated model.
         """
         if self._covariance_estimator is not None:
@@ -104,30 +104,48 @@ class SymVAMP(VAMP):
             self._model = self._decompose(self._covariance_estimator.fetch_model())
             self._covariance_estimator = None
         return self._model
+    
+    def transform_subunit(self, data, propagate=False):
+        r""" Projects given timeseries onto dominant singular functions. This method dispatches to
+        :meth:`CovarianceKoopmanModel.transform_subunit`.
+
+        Parameters
+        ----------
+        data : (T, n) ndarray
+            Input timeseries data.
+        propagate : bool, default=False
+            Whether to apply the Koopman operator after data was transformed into the whitened feature space.
+
+        Returns
+        -------
+        Y : (T, m) ndarray
+            The projected data.
+            If `right` is True, projection will be on the right singular functions. Otherwise, projection will be on
+            the left singular functions.
+        """
+        return self.fetch_model().transform_subunit(data, propagate=propagate)
 
 
-class SymTICA(TICA, SymVAMP):
+class GAMMA_EQUI_TICA(TICA, GAMMA_EQUI_VAMP):
     def __init__(self, symmetry_fold,
                  lagtime: Optional[int] = None, epsilon: float = 1e-6, dim: Optional[int] = None,
                  var_cutoff: Optional[float] = None, scaling: Optional[str] = 'kinetic_map',
                  observable_transform: Callable[[np.ndarray], np.ndarray] = Identity()):
-        SymVAMP.__init__(self, symmetry_fold=symmetry_fold,
+        GAMMA_EQUI_VAMP.__init__(self, symmetry_fold=symmetry_fold,
                                    lagtime=lagtime, dim=dim, var_cutoff=var_cutoff,
                                    scaling=scaling, epsilon=epsilon,
                                    observable_transform=observable_transform)
 
     @staticmethod
-    def _decomposition(covariances, epsilon, scaling, dim, var_cutoff, symmetry_fold) -> SymVAMP._DiagonalizationResults:
+    def _decomposition(covariances, epsilon, scaling, dim, var_cutoff, symmetry_fold) -> VAMP._DiagonalizationResults:
         print("symmetry_fold", symmetry_fold)
         if covariances.cov_00.shape[0] % symmetry_fold != 0:
             raise ValueError(f"Number of features {covariances.cov_00.shape[0]} must" +
                              f"be divisible by symmetry_fold {symmetry_fold}.")
 
-        subset_rank = covariances.cov_00.shape[0] // symmetry_fold
-
-        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
-        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
-        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+        cov_00 = covariances.cov_00
+        cov_0t = covariances.cov_0t
+        cov_tt = covariances.cov_tt
         
         
         from deeptime.numeric import ZeroRankError
@@ -150,13 +168,13 @@ class SymTICA(TICA, SymVAMP):
 
             eigenvectors *= np.sqrt(regularized_timescales / 2)
 
-        return SymVAMP._DiagonalizationResults(
+        return GAMMA_EQUI_VAMP._DiagonalizationResults(
             rank0=rank, rankt=rank, singular_values=eigenvalues,
             left_singular_vecs=eigenvectors, right_singular_vecs=eigenvectors
         )
 
 
-class SymWhiteningTransform(Observable):
+class GAMMA_EQUI_WhiteningTransform(Observable):
     r""" Transformation of symmetric data into a whitened space.
     It is assumed that for a covariance matrix :math:`C` the
     square-root inverse :math:`C^{-1/2}` was already computed. Optionally a mean :math:`\mu` can be provided.
@@ -185,11 +203,18 @@ class SymWhiteningTransform(Observable):
         if self.mean is not None:
             x = x - self.mean
         if nosum:
-            return x @ self.sqrt_inv_cov[..., :self.dim]
-        return np.sum(x @ self.sqrt_inv_cov[..., :self.dim], axis=1)
+#            output = np.empty((x.shape[0], x.shape[1], self.dim))
+#            for i in range(x.shape[0]):
+#                output[i] = x[i].reshape(-1,1) * self.sqrt_inv_cov[..., :self.dim]
+#            return output
+#            return x.reshape(x.shape[0], x.shape[1], 1) * self.sqrt_inv_cov[..., :self.dim]
+            return np.einsum('ij,jk->ijk', x, self.sqrt_inv_cov[:,:self.dim])
+
+        return x @ self.sqrt_inv_cov[..., :self.dim]
+        
 
 
-class SymCovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
+class GAMMA_EQUI_CovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
     """
     Symmetric transformation version of Covariance Koopman Model
     """
@@ -199,10 +224,10 @@ class SymCovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
                 timelagged_obs: Callable[[np.ndarray], np.ndarray] = Identity()):
 
         self.symmetry_fold = symmetrty_fold
-        self._whitening_instantaneous = SymWhiteningTransform(instantaneous_coefficients,
-                                                            cov.mean_0[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
-        self._whitening_timelagged = SymWhiteningTransform(timelagged_coefficients,
-                                                        cov.mean_t[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
+        self._whitening_instantaneous = GAMMA_EQUI_WhiteningTransform(instantaneous_coefficients,
+                                                            cov.mean_0 if cov.data_mean_removed else None)
+        self._whitening_timelagged = GAMMA_EQUI_WhiteningTransform(timelagged_coefficients,
+                                                        cov.mean_t if cov.data_mean_removed else None)
         TransferOperatorModel.__init__(self, np.diag(singular_values),
                             Concatenation(self._whitening_instantaneous, instantaneous_obs),
                             Concatenation(self._whitening_timelagged, timelagged_obs))
@@ -220,9 +245,12 @@ class SymCovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
         self._update_output_dimension()
     
     def transform(self, data: np.ndarray, **kw):
-        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
+#        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
         return self.instantaneous_obs(data)
     
     def transform_subunit(self, data: np.ndarray, **kw):
-        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
-        return self._whitening_instantaneous._evaluate(data, nosum=True)
+        transformed = self._whitening_instantaneous._evaluate(data, nosum=True)
+        n_feat = transformed.shape[1]
+        n_feat_subunit = n_feat // self.symmetry_fold
+        transformed = np.sum(transformed.reshape(transformed.shape[0], self.symmetry_fold, n_feat_subunit, -1), axis=2)
+        return transformed.transpose(0, 2, 1)
