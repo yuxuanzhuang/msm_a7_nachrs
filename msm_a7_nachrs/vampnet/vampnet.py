@@ -608,13 +608,28 @@ def vamp_score_nosym(data: torch.Tensor, data_lagged: torch.Tensor, symmetry_fol
                              f"be divisible by symmetry_fold {symmetry_fold}.")
         subset_rank = c00.shape[0] // symmetry_fold
 
-        c00 = c00[:subset_rank, :subset_rank]
-        c0t = c0t[:subset_rank, :subset_rank]
-        ctt = ctt[:subset_rank, :subset_rank]
+        cov_00_blocks = []
+        cov_0t_blocks = []
+        cov_tt_blocks = []
+        for i in range(symmetry_fold):
+            cov_00_blocks.append(c00[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+            cov_0t_blocks.append(c0t[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+            cov_tt_blocks.append(ctt[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+                             
+#        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
+#        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
+#        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+        cov_00 = torch.sum(torch.stack(cov_00_blocks), axis=0)
+        cov_0t = torch.sum(torch.stack(cov_0t_blocks), axis=0)
+        cov_tt = torch.sum(torch.stack(cov_tt_blocks), axis=0)
 
-        c00_sqrt_inv = sym_inverse(c00, epsilon=epsilon, return_sqrt=True, mode=mode)
-        ctt_sqrt_inv = sym_inverse(ctt, epsilon=epsilon, return_sqrt=True, mode=mode)
-        koopman = multi_dot([c00_sqrt_inv, c0t, ctt_sqrt_inv]).t()
+
+        c00_sqrt_inv = sym_inverse(cov_00, epsilon=epsilon, return_sqrt=True, mode=mode)
+        ctt_sqrt_inv = sym_inverse(cov_tt, epsilon=epsilon, return_sqrt=True, mode=mode)
+        koopman = multi_dot([c00_sqrt_inv, cov_0t, ctt_sqrt_inv]).t()
 
         u, s, v = torch.svd(koopman)
         mask = s > epsilon
@@ -628,7 +643,7 @@ def vamp_score_nosym(data: torch.Tensor, data_lagged: torch.Tensor, symmetry_fol
         s = torch.diag(s)
 
         out = torch.trace(
-            2. * multi_dot([s, u_t, c0t, v]) - multi_dot([s, u_t, c00, u, s, v_t, ctt, v])
+            2. * multi_dot([s, u_t, cov_0t, v]) - multi_dot([s, u_t, cov_00, u, s, v_t, cov_tt, v])
         )
     assert out is not None
     return 1 + out
@@ -671,10 +686,24 @@ def koopman_matrix_nosym(x: torch.Tensor, y: torch.Tensor, symmetry_fold: int, e
                          f"be divisible by symmetry_fold {symmetry_fold}.")
     subset_rank = c00.shape[0] // symmetry_fold
 
-    c00 = c00[:subset_rank, :subset_rank]
-    c0t = c0t[:subset_rank, :subset_rank]
-    ctt = ctt[:subset_rank, :subset_rank]
+    cov_00_blocks = []
+    cov_0t_blocks = []
+    cov_tt_blocks = []
+    for i in range(symmetry_fold):
+        cov_00_blocks.append(c00[:subset_rank,
+                                i * subset_rank:(i + 1) * subset_rank])
+        cov_0t_blocks.append(c0t[:subset_rank,
+                                i * subset_rank:(i + 1) * subset_rank])
+        cov_tt_blocks.append(ctt[:subset_rank,
+                                i * subset_rank:(i + 1) * subset_rank])
+                            
+#        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
+#        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
+#        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+    cov_00 = torch.sum(torch.stack(cov_00_blocks), axis=0)
+    cov_0t = torch.sum(torch.stack(cov_0t_blocks), axis=0)
+    cov_tt = torch.sum(torch.stack(cov_tt_blocks), axis=0)
 
-    c00_sqrt_inv = sym_inverse(c00, return_sqrt=True, epsilon=epsilon, mode=mode)
-    ctt_sqrt_inv = sym_inverse(ctt, return_sqrt=True, epsilon=epsilon, mode=mode)
-    return multi_dot([c00_sqrt_inv, c0t, ctt_sqrt_inv]).t()
+    c00_sqrt_inv = sym_inverse(cov_00, return_sqrt=True, epsilon=epsilon, mode=mode)
+    ctt_sqrt_inv = sym_inverse(cov_tt, return_sqrt=True, epsilon=epsilon, mode=mode)
+    return multi_dot([c00_sqrt_inv, cov_0t, ctt_sqrt_inv]).t()

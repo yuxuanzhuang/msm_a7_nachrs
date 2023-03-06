@@ -48,9 +48,23 @@ class SymVAMP(VAMP):
                              f"be divisible by symmetry_fold {symmetry_fold}.")
 
         subset_rank = covariances.cov_00.shape[0] // symmetry_fold
-        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
-        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
-        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+        cov_00_blocks = []
+        cov_0t_blocks = []
+        cov_tt_blocks = []
+        for i in range(symmetry_fold):
+            cov_00_blocks.append(covariances.cov_00[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+            cov_0t_blocks.append(covariances.cov_0t[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+            cov_tt_blocks.append(covariances.cov_tt[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+                             
+#        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
+#        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
+#        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+        cov_00 = np.sum(cov_00_blocks, axis=0)
+        cov_0t = np.sum(cov_0t_blocks, axis=0)
+        cov_tt = np.sum(cov_tt_blocks, axis=0)
 
         L0 = spd_inv_split(cov_00, epsilon=epsilon)
         rank0 = L0.shape[1] if L0.ndim == 2 else 1
@@ -105,6 +119,26 @@ class SymVAMP(VAMP):
             self._covariance_estimator = None
         return self._model
 
+    def transform_subunit(self, data, propagate=False):
+        r""" Projects given timeseries onto dominant singular functions. This method dispatches to
+        :meth:`CovarianceKoopmanModel.transform_subunit`.
+
+        Parameters
+        ----------
+        data : (T, n) ndarray
+            Input timeseries data.
+        propagate : bool, default=False
+            Whether to apply the Koopman operator after data was transformed into the whitened feature space.
+
+        Returns
+        -------
+        Y : (T, m) ndarray
+            The projected data.
+            If `right` is True, projection will be on the right singular functions. Otherwise, projection will be on
+            the left singular functions.
+        """
+        return self.fetch_model().transform_subunit(data, propagate=propagate)
+
 
 class SymTICA(TICA, SymVAMP):
     def __init__(self, symmetry_fold,
@@ -124,11 +158,25 @@ class SymTICA(TICA, SymVAMP):
                              f"be divisible by symmetry_fold {symmetry_fold}.")
 
         subset_rank = covariances.cov_00.shape[0] // symmetry_fold
+        # convert covariance matrices to blocks
+        cov_00_blocks = []
+        cov_0t_blocks = []
+        cov_tt_blocks = []
+        for i in range(symmetry_fold):
+            cov_00_blocks.append(covariances.cov_00[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+            cov_0t_blocks.append(covariances.cov_0t[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+            cov_tt_blocks.append(covariances.cov_tt[:subset_rank,
+                                 i * subset_rank:(i + 1) * subset_rank])
+                             
+#        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
+#        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
+#        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
+        cov_00 = np.sum(cov_00_blocks, axis=0)
+        cov_0t = np.sum(cov_0t_blocks, axis=0)
+        cov_tt = np.sum(cov_tt_blocks, axis=0)
 
-        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
-        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
-        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
-        
         
         from deeptime.numeric import ZeroRankError
 
@@ -225,4 +273,4 @@ class SymCovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
     
     def transform_subunit(self, data: np.ndarray, **kw):
         data = data.reshape(data.shape[0], self.symmetry_fold, -1)
-        return self._whitening_instantaneous._evaluate(data, nosum=True)
+        return self._whitening_instantaneous._evaluate(data, nosum=True).reshape(data.shape[0], self.symmetry_fold, -1)

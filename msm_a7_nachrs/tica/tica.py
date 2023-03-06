@@ -24,7 +24,6 @@ from ..datafiles import BGT, EPJ, EPJPNU
 from ..msm.MSM_a7 import MSMInitializer
 from ..util.dataloader import MultimerTrajectoriesDataset, get_symmetrized_data
 from .sym_tica import SymTICA
-from .gamma_equi_tica import GAMMA_EQUI_TICA
 
 
 pathways = [
@@ -180,7 +179,7 @@ class TICAInitializer(MSMInitializer):
             feature_trajectory = np.concatenate(feature_trajectory, axis=2).reshape(raw_data.shape[0], -1)
             feature_trajectories = get_symmetrized_data([feature_trajectory], self.multimer)
             for single_traj in feature_trajectories:
-                if not subunit:
+                if subunit:
                     mapped_feature_trajectories.append(self.tica.transform_subunit(single_traj))
                 else:
                     mapped_feature_trajectories.append(self.tica.transform(single_traj))
@@ -242,67 +241,10 @@ class TICAInitializer(MSMInitializer):
         gc.collect()
 
         return test_feature_TIC_MI_df
-
+    
 
 class SymTICAInitializer(TICAInitializer):
     prefix = "sym_tica"
-
-    def start_analysis(self, block_size=10, n_jobs=32):
-        os.makedirs(self.filename, exist_ok=True)
-        if (not os.path.isfile(self.filename + 'sym_tica.pickle')) or self.updating:
-            print('Start new Sym TICA analysis')
-            if self.in_memory:
-                if not self.data_collected:
-                    self.gather_feature_matrix()
-
-                self.tica = SymTICA(symmetry_fold=self.multimer,
-                            var_cutoff=0.8, lagtime=self.lag)
-                self.tica.fit(self.feature_trajectories)
-                pickle.dump(self.tica,
-                open(
-                    self.filename +
-                    'sym_tica.pickle',
-                    'wb'))
-                with tqdm_joblib(tqdm(desc="Transform features", total=len(self.feature_trajectories))) as progress_bar:
-                    self.tica_output = Parallel(n_jobs=n_jobs)(delayed(self.tica_transform)(self.tica, feature_traj) for feature_traj in self.feature_trajectories)
-
-            else:
-                self.tica = SymTICA(symmetry_fold=self.multimer,
-                            var_cutoff=0.8, lagtime=self.lag)
-                self.partial_fit_tica(block_size=block_size)
-                _ = self.tica.fetch_model()
-                pickle.dump(self.tica,
-                open(
-                    self.filename +
-                    'sym_tica.pickle',
-                    'wb'))
-                self.tica_output = self.transform_feature_trajectories(self.md_dataframe,
-                                        start=self.start)
-
-            self.tica_concatenated = np.concatenate(self.tica_output)
-
-            pickle.dump(
-                self.tica_output,
-                open(
-                    self.filename +
-                    'output.pickle',
-                    'wb'))
-#            if self.in_memory:
-#                self.dump_feature_trajectories()
-            gc.collect()
-
-        else:
-            print('Load old sym TICA results')
-            self.tica = pickle.load(
-                open(self.filename + 'sym_tica.pickle', 'rb'))
-            self.tica_output = pickle.load(
-                open(self.filename + 'output.pickle', 'rb'))
-            self.tica_concatenated = np.concatenate(self.tica_output)
-
-
-
-class GammaEquiTICAInitializer(TICAInitializer):
-    prefix = "gamma_equi_tica"
 
     @staticmethod
     def tica_transform_subunit(tica_model, feature_traj) -> np.ndarray:
@@ -311,18 +253,18 @@ class GammaEquiTICAInitializer(TICAInitializer):
     def start_analysis(self, block_size=10, n_jobs=32):
         os.makedirs(self.filename, exist_ok=True)
         if (not os.path.isfile(self.filename + 'sym_tica.pickle')) or self.updating:
-            print('Start new Gamma-equivariant TICA analysis')
+            print('Start new sym TICA analysis')
             if self.in_memory:
                 if not self.data_collected:
                     self.gather_feature_matrix()
 
-                self.tica = GAMMA_EQUI_TICA(symmetry_fold=self.multimer,
+                self.tica = SymTICA(symmetry_fold=self.multimer,
                             var_cutoff=0.8, dim=6, lagtime=self.lag)
                 self.tica.fit(self.feature_trajectories)
                 pickle.dump(self.tica,
                 open(
                     self.filename +
-                    'gamma_tica.pickle',
+                    'sym_tica.pickle',
                     'wb'))
                 if n_jobs != 1:
                     print('transforming feature trajectories')
@@ -340,14 +282,14 @@ class GammaEquiTICAInitializer(TICAInitializer):
                         self.tica_subunit_output.append(self.tica_transform_subunit(self.tica, feature_traj))
 
             else:
-                self.tica = GAMMA_EQUI_TICA(symmetry_fold=self.multimer,
-                            var_cutoff=0.8, lagtime=self.lag)
+                self.tica = SymTICA(symmetry_fold=self.multimer,
+                            var_cutoff=0.8, dim=6, lagtime=self.lag)
                 self.partial_fit_tica(block_size=block_size)
                 _ = self.tica.fetch_model()
                 pickle.dump(self.tica,
                 open(
                     self.filename +
-                    'gamma_tica.pickle',
+                    'sym_tica.pickle',
                     'wb'))
                 self.tica_output = self.transform_feature_trajectories(self.md_dataframe,
                                         start=self.start)
@@ -377,6 +319,6 @@ class GammaEquiTICAInitializer(TICAInitializer):
                 open(self.filename + 'sym_tica.pickle', 'rb'))
             self.tica_output = pickle.load(
                 open(self.filename + 'output.pickle', 'rb'))
-            self.tica_output = pickle.load(
+            self.tica_subunit_output = pickle.load(
                 open(self.filename + 'output_subunit.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
