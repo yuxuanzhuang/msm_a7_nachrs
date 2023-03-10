@@ -14,6 +14,7 @@ from scipy.stats import pearsonr
 from pydantic import BaseModel
 from datetime import datetime
 from copy import copy, deepcopy
+from sklearn.neighbors import KNeighborsClassifier
 
 from typing import List, Optional
 
@@ -243,13 +244,20 @@ class MSMInitializer(object):
         if not self.data_collected:
             self.gather_feature_matrix()
 
-    def clustering_with_deeptime(self, meaningful_tic,
-                                 n_clusters, updating=False,
+    def clustering_with_deeptime(self, 
+                                 n_clusters,
+                                 meaningful_tic=None,
+                                 updating=False,
                                  max_iter=1000):
         if self.tica_output is None:
             raise ValueError('TICA output not available')
         self.n_clusters = n_clusters
+
+        if meaningful_tic is None:
+            meaningful_tic = np.arange(self.tica_output[0].shape[1])
         self.meaningful_tic = meaningful_tic
+        print('Meaningful TICs are', meaningful_tic)
+        
         self.tica_output_filter = [
             np.asarray(output)[
                 :, meaningful_tic] for output in self.tica_output]
@@ -338,6 +346,15 @@ class MSMInitializer(object):
 
         self.dtrajs_concatenated = np.concatenate(self.cluster_dtrajs)
 
+    def assigning_cluster(self,
+                          cluster_dtrajs,
+                          n_clusters=None):
+        if n_clusters is not None:
+            self.n_clusters = n_clusters
+        self.cluster_dtrajs = cluster_dtrajs
+        self.meaningful_tic = 'all'
+        self.dtrajs_concatenated = np.concatenate(self.cluster_dtrajs)
+
     @staticmethod
     def bayesian_msm_from_traj(cluster_dtrajs, lagtime, n_samples):
             counts = TransitionCountEstimator(lagtime=lagtime, count_mode='effective').fit_fetch(cluster_dtrajs)
@@ -399,6 +416,8 @@ class MSMInitializer(object):
                 nits=10,
                 errors='bayes',
                 only_timescales=True)
+        else:
+            raise ValueError('Cluster method not recognized')
 
         return self.its
     
@@ -412,38 +431,9 @@ class MSMInitializer(object):
         plt.show()
 
         
-    def get_ck_test(self, n_states, lag, mlags=6, n_jobs=6, n_samples=20, updating=False):
-        if not (os.path.isfile(self.cluster_filename +
-                f'_deeptime_cktest.pickle')) or updating or self.rerun_msm:
-            print('CK models building')
-
-            lagtimes = np.arange(1, mlags+1) * lag
-
-            print('Estimating lagtimes', lagtimes)
-
-            if n_jobs != 1:
-                with tqdm_joblib(tqdm(desc="ITS", total=len(lagtimes))) as progress_bar:
-                    models = Parallel(n_jobs=n_jobs)(delayed(self.bayesian_msm_from_traj)(self.cluster_dtrajs,
-                                                                lagtime, n_samples) for lagtime in lagtimes)
-            else:
-                models = []
-                for lagtime in tqdm(lagtimes, desc='lagtime', total=len(lagtimes)):
-                    counts = TransitionCountEstimator(lagtime=lagtime, count_mode='effective').fit_fetch(self.cluster_dtrajs)
-                    models.append(BayesianMSM(n_samples=n_samples).fit_fetch(counts))
-
-            print('Start CK test')
-            if (n_states, lag) not in self.ck_test:
-                self.ck_test[n_states, lag] = {
-                        'ck_test': models[0].ck_test(models, n_states, progress=tqdm),
-                        'models': models
-                }
-            pickle.dump(
-                    self.ck_test,
-                    open(
-                        self.cluster_filename +
-                        f'_deeptime_cktest.pickle',
-                        'wb'))
-        else:
+    def get_ck_test(self, n_states, lag, mlags=6, lag_max=300, n_jobs=6, n_samples=20, updating=False):
+        if not updating and not self.rerun_msm and (os.path.isfile(self.cluster_filename +
+                                                                   f'_deeptime_cktest.pickle')):
             print('Loading old CK test')
             self.ck_test = pickle.load(
                 open(
@@ -451,7 +441,36 @@ class MSMInitializer(object):
                     f'_deeptime_cktest.pickle',
                     'rb'))
             
-        return plot_ck_test(self.ck_test[n_states, lag]['ck_test'])
+        if (n_states, lag, lag_max, mlags) not in self.ck_test:            
+            print('CK models building')
+            model =  BayesianMSM(n_samples=n_samples).fit_fetch(TransitionCountEstimator(lagtime=lag,
+                                                        count_mode='effective').fit_fetch(self.cluster_dtrajs))
+            lagtimes = np.linspace(1, lag_max, mlags).astype(int)
+            print('Estimating lagtimes', lagtimes)
+
+            if n_jobs != 1:
+                with tqdm_joblib(tqdm(desc="ITS", total=len(lagtimes))) as progress_bar:
+                    test_models = Parallel(n_jobs=n_jobs)(delayed(self.bayesian_msm_from_traj)(self.cluster_dtrajs,
+                                                                lagtime, n_samples) for lagtime in lagtimes)
+            else:
+                test_models = []
+                for lagtime in tqdm(lagtimes, desc='lagtime', total=len(lagtimes)):
+                    counts = TransitionCountEstimator(lagtime=lagtime, count_mode='effective').fit_fetch(self.cluster_dtrajs)
+                    test_models.append(BayesianMSM(n_samples=n_samples).fit_fetch(counts))
+            print('Start CK test')
+            self.ck_test[n_states, lag, lag_max, mlags] = {
+                    'model': model,
+                    'ck_test': model.ck_test(test_models, n_states, progress=tqdm),
+                    'models': test_models
+            }
+            pickle.dump(
+                    self.ck_test,
+                    open(
+                        self.cluster_filename +
+                        f'_deeptime_cktest.pickle',
+                        'wb'))
+            
+        return plot_ck_test(self.ck_test[n_states, lag, lag_max, mlags]['ck_test'])
 
 
     def get_maximum_likelihood_msm(self, lag, cluster='deeptime', updating=False):
