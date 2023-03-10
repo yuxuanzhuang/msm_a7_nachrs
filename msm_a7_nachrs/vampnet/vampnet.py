@@ -20,7 +20,11 @@ from deeptime.base import Model, Transformer
 from deeptime.base_torch import DLEstimatorMixin
 from deeptime.util.torch import map_data
 from deeptime.markov.tools.analysis import pcca_memberships
-
+from deeptime.clustering import KMeans
+from deeptime.markov import TransitionCountEstimator
+from deeptime.markov.msm import BayesianMSM
+from deeptime.decomposition import VAMP, TICA
+from torch.utils.data import DataLoader
 
 from deeptime.decomposition.deep import VAMPNet
 from ..deepmsm.deepmsm import *
@@ -30,11 +34,16 @@ from typing import Optional, Union, Callable, Tuple
 from deeptime.decomposition.deep import vampnet_loss, vamp_score
 from deeptime.util.torch import disable_TF32, map_data, multi_dot
 from sklearn import preprocessing
+from scipy.stats import rankdata
+from ..tica.sym_tica import SymTICA
+
 
 class VAMPNETInitializer(MSMInitializer):
     prefix = "vampnet"
 
     def start_analysis(self):
+        self._vampnets = []
+        self._vampnet_dict = {}
         os.makedirs(self.filename, exist_ok=True)
 
         if (not os.path.isfile(self.filename + 'vampnet.pyemma')) or self.updating:
@@ -66,6 +75,135 @@ class VAMPNETInitializer(MSMInitializer):
             print('Load old VAMPNET results')
 #            self = pickle.load(open(self.filename + 'vampnet_init.pickle', 'rb'))
 
+    @property
+    def vampnets(self):
+        return self._vampnets
+    
+    @vampnets.setter
+    def vampnets(self, value):
+        self._vampnets = value
+        self.select_vampnet(0)
+
+    @property
+    def state_list(self):
+        return [f'{vampnet.n_states}_state_{vampnet.rep}_rep' for vampnet in self._vampnets]
+    
+    @property
+    def vampnet_dict(self):
+        if not self._vampnet_dict:
+            self._vampnet_dict = {key: {} for key in self.state_list}
+        return self._vampnet_dict
+    
+    def select_vampnet(self, index, update=False):
+        self.active_vampnet = self.vampnets[index]
+        self.active_vampnet_name = self.state_list[index]
+        print('The activated VAMPNET # states:', self.active_vampnet.n_states)
+        print('The activated VAMPNET # rep:', self.active_vampnet.rep)
+
+        if not self.vampnet_dict[self.active_vampnet_name] or update:
+            state_probabilities = [self.active_vampnet.transform(traj) for traj in self.dataset.trajectories]
+            state_probabilities_concat = np.concatenate(state_probabilities)
+            assignments = [stat_prob.argmax(1) for stat_prob in state_probabilities]
+            assignments_concat = np.concatenate(assignments)
+
+            self._vampnet_dict[self.active_vampnet_name]['state_probabilities'] = state_probabilities
+            self._vampnet_dict[self.active_vampnet_name]['state_probabilities_concat'] = state_probabilities_concat
+            self._vampnet_dict[self.active_vampnet_name]['assignments'] = assignments
+            self._vampnet_dict[self.active_vampnet_name]['assignments_concat'] = assignments_concat
+        self.state_probabilities = self._vampnet_dict[self.active_vampnet_name]['state_probabilities']
+        self.state_probabilities_concat = self._vampnet_dict[self.active_vampnet_name]['state_probabilities_concat']
+        self.assignments = self._vampnet_dict[self.active_vampnet_name]['assignments']
+        self.assignments_concat = self._vampnet_dict[self.active_vampnet_name]['assignments_concat']
+
+    def get_tica_model(self):
+        print(f'Start TICA with VAMPNET model {self.active_vampnet_name}, lagtime: {self.lag}')
+        self.tica = TICA(lagtime=self.lag,
+                         observable_transform=self.active_vampnet.fetch_model())
+        data_loader = DataLoader(self.dataset, batch_size=20000, shuffle=True)
+        for batch_0, batch_t in tqdm(data_loader):
+
+            n_feat_per_sub = batch_0.shape[1] // self.active_vampnet.multimer
+
+            batch_0 = torch.concat([torch.roll(batch_0, n_feat_per_sub * i, 1) for i in range(self.multimer)])
+            batch_t = torch.concat([torch.roll(batch_t, n_feat_per_sub * i, 1) for i in range(self.multimer)])
+
+            self.tica.partial_fit((batch_0.numpy(), batch_t.numpy()))
+        self.tica_model = self.tica.fetch_model()
+
+        self._vampnet_dict[self.active_vampnet_name]['tica_model'] = self.tica_model
+
+        self.tica_output = [self.tica_model.transform(traj) for traj in self.dataset.trajectories]
+        self.tica_concatenated = np.concatenate(self.tica_output)
+        print('TICA shape:', self.tica_concatenated.shape)
+
+
+class VAMPNETInitializer_Multimer(VAMPNETInitializer):
+    def select_vampnet(self, index, update=False):
+        self.active_vampnet = self.vampnets[index]
+        self.active_vampnet_name = self.state_list[index]
+        print('The activated VAMPNET # states:', self.active_vampnet.n_states)
+
+        if not self.vampnet_dict[self.active_vampnet_name] or update:
+            state_probabilities = [self.active_vampnet.transform(traj) for traj in self.dataset.trajectories]
+            state_probabilities_concat = np.concatenate(state_probabilities)
+            assignments = [stat_prob.reshape(stat_prob.shape[0],
+                                 self.active_vampnet.multimer,
+                                 self.active_vampnet.n_states).argmax(2) for stat_prob in state_probabilities]
+            assignments_concat = np.concatenate(assignments)
+            cluster_degen_dtrajs = []
+            for sub_dtrajs in assignments:
+            #    degenerated_traj = np.apply_along_axis(convert_state_to_degenerated, axis=1, arr=sub_dtrajs)
+                sorted_sub_dtrajs = np.sort(sub_dtrajs, axis=1)[:,::-1]
+                cluster_degen_dtrajs.append(np.sum(sorted_sub_dtrajs * (self.active_vampnet.n_states ** np.arange(self.active_vampnet.multimer)), axis=1))
+            cluster_degen_concat = np.concatenate(cluster_degen_dtrajs)
+            cluster_rank_concat = rankdata(cluster_degen_concat, method='dense') - 1
+            print('# of cluster',cluster_rank_concat.max() + 1)
+            self.n_clusters = cluster_rank_concat.max() + 1
+            cluster_rank_dtrajs = []
+            curr_ind = 0
+            for sub_dtrajs in assignments:
+                cluster_rank_dtrajs.append(cluster_rank_concat[curr_ind:curr_ind+sub_dtrajs.shape[0]])
+                curr_ind += sub_dtrajs.shape[0]
+
+
+            self._vampnet_dict[self.active_vampnet_name]['state_probabilities'] = state_probabilities
+            self._vampnet_dict[self.active_vampnet_name]['state_probabilities_concat'] = state_probabilities_concat
+            self._vampnet_dict[self.active_vampnet_name]['assignments'] = assignments
+            self._vampnet_dict[self.active_vampnet_name]['assignments_concat'] = assignments_concat
+            self._vampnet_dict[self.active_vampnet_name]['cluster_degen_dtrajs'] = cluster_degen_dtrajs
+            self._vampnet_dict[self.active_vampnet_name]['cluster_degen_concat'] = cluster_degen_concat
+            self._vampnet_dict[self.active_vampnet_name]['cluster_rank_dtrajs'] = cluster_rank_dtrajs
+            self._vampnet_dict[self.active_vampnet_name]['cluster_rank_concat'] = cluster_rank_concat
+        self.state_probabilities = self._vampnet_dict[self.active_vampnet_name]['state_probabilities']
+        self.state_probabilities_concat = self._vampnet_dict[self.active_vampnet_name]['state_probabilities_concat']
+        self.assignments = self._vampnet_dict[self.active_vampnet_name]['assignments']
+        self.assignments_concat = self._vampnet_dict[self.active_vampnet_name]['assignments_concat']
+        self.cluster_degen_dtrajs = self._vampnet_dict[self.active_vampnet_name]['cluster_degen_dtrajs']
+        self.cluster_degen_concat = self._vampnet_dict[self.active_vampnet_name]['cluster_degen_concat']
+        self.cluster_rank_dtrajs = self._vampnet_dict[self.active_vampnet_name]['cluster_rank_dtrajs']
+        self.cluster_rank_concat = self._vampnet_dict[self.active_vampnet_name]['cluster_rank_concat']
+
+    def get_tica_model(self):
+        print(f'Start SymTICA with VAMPNET model {self.active_vampnet_name}, lagtime: {self.lag}')
+        self.tica = SymTICA(
+                            symmetry_fold=self.active_vampnet.multimer,
+                            lagtime=self.lag,
+                            observable_transform=self.active_vampnet.fetch_model())
+        data_loader = DataLoader(self.dataset, batch_size=20000, shuffle=True)
+        for batch_0, batch_t in tqdm(data_loader):
+            n_feat_per_sub = batch_0.shape[1] // self.active_vampnet.multimer
+
+            batch_0 = torch.concat([torch.roll(batch_0, n_feat_per_sub * i, 1) for i in range(self.multimer)])
+            batch_t = torch.concat([torch.roll(batch_t, n_feat_per_sub * i, 1) for i in range(self.multimer)])
+
+            self.tica.partial_fit((batch_0.numpy(), batch_t.numpy()))
+        self.tica_model = self.tica.fetch_model()
+
+        self._vampnet_dict[self.active_vampnet_name]['tica_model'] = self.tica_model
+
+        self.tica_output = [self.tica_model.transform(traj) for traj in self.dataset.trajectories]
+        self.tica_concatenated = np.concatenate(self.tica_output)
+        print('TICA shape:', self.tica_concatenated.shape)
 
 class MultimerNet(nn.Module):
     def __init__(self, data_shape, multimer, n_states):
@@ -152,6 +290,7 @@ class VAMPNet_Multimer(VAMPNet):
     def __init__(self,
                  multimer: int,
                  n_states: int,
+                 rep: int = 0,
                  lobe: nn.Module, lobe_timelagged: Optional[nn.Module] = None,
                  device=None, optimizer: Union[str, Callable] = 'Adam', learning_rate: float = 5e-4,
                  score_method: str = 'VAMP2', score_mode: str = 'regularize', epsilon: float = 1e-6,
@@ -169,6 +308,7 @@ class VAMPNet_Multimer(VAMPNet):
 
         self.multimer = multimer
         self.n_states = n_states
+        self.rep = rep
         self.trained = trained
 
         """
@@ -216,152 +356,6 @@ class VAMPNet_Multimer(VAMPNet):
                 device=self.device)
 
         self.optimizer.zero_grad()
-        x_0 = self.lobe(batch_0)
-        x_t = self.lobe_timelagged(batch_t)
-
-        # x_0_aug = torch.concat([torch.roll(x_0, self.n_states * i, 1) for i in range(self.multimer)])
-        # x_t_aug = torch.concat([torch.roll(x_t, self.n_states * i, 1) for i in range(self.multimer)])
-#        loss_value = vampnet_loss(x_0_aug, x_t_aug, method=self.score_method, epsilon=self.epsilon, mode=self.score_mode)
-
-        loss_value = vampnet_loss(
-            x_0,
-            x_t,
-            method=self.score_method,
-            epsilon=self.epsilon,
-            mode=self.score_mode)
-
-        loss_value.backward()
-        self.optimizer.step()
-
-        if train_score_callback is not None:
-            lval_detached = loss_value.detach()
-            train_score_callback(self._step, -lval_detached)
-        if tb_writer is not None:
-            tb_writer.add_scalars('Loss', {'train': loss_value.item()}, self._step)
-            tb_writer.add_scalars('VAMPE', {'train': -loss_value.item()}, self._step)
-        self._train_scores.append((self._step, (-loss_value).item()))
-        self._step += 1
-
-        return self
-
-    def validate(self, validation_data: Tuple[torch.Tensor]) -> torch.Tensor:
-
-        with disable_TF32():
-            self.lobe.eval()
-            self.lobe_timelagged.eval()
-
-            with torch.no_grad():
-                val = self.lobe(validation_data[0])
-                val_t = self.lobe_timelagged(validation_data[1])
-                # augmenting validation set by permutation
-                val_aug = torch.concat(
-                    [torch.roll(val, self.n_states * i, 1) for i in range(self.multimer)])
-                val_t_aug = torch.concat(
-                    [torch.roll(val_t, self.n_states * i, 1) for i in range(self.multimer)])
-                score_value = vamp_score(
-                    val_aug,
-                    val_t_aug,
-                    method=self.score_method,
-                    mode=self.score_mode,
-                    epsilon=self.epsilon)
-                return score_value
-
-    def transform(self, data, **kwargs):
-        r""" Transforms data with the encapsulated model.
-
-        Parameters
-        ----------
-        data : array_like
-            Input data
-        **kwargs
-            Optional arguments.
-
-        Returns
-        -------
-        output : array_like
-            Transformed data.
-        """
-        if not self.trained:
-            warnings.warn( 'VAMPNet not trained yet. Please call fit first.')
-        model = self.fetch_model()
-        if model is None:
-            raise ValueError("This estimator contains no model yet, fit should be called first.")
-        return model.transform(data, **kwargs)
-
-
-class VAMPNet_Multimer_Aug(VAMPNet):
-    def __init__(self,
-                 multimer: int,
-                 n_states: int,
-                 lobe: nn.Module, lobe_timelagged: Optional[nn.Module] = None,
-                 device=None, optimizer: Union[str, Callable] = 'Adam', learning_rate: float = 5e-4,
-                 score_method: str = 'VAMP2', score_mode: str = 'regularize', epsilon: float = 1e-6,
-                 dtype=np.float32,
-                 trained=False):
-        super().__init__(lobe,
-                         lobe_timelagged,
-                         device,
-                         optimizer,
-                         learning_rate,
-                         score_method,
-                         score_mode,
-                         epsilon,
-                         dtype)
-
-        self.multimer = multimer
-        self.n_states = n_states
-        self.trained = trained
-
-        """
-        try:
-            if self.multimer != self.lobe.module.multimer:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-            if self.n_states != self.lobe.module.n_states:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-        except AttributeError:
-            if self.multimer != self.lobe.multimer:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-            if self.n_states != self.lobe.n_states:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-        """
-        
-    def partial_fit(self, data, train_score_callback: Callable[[
-                    int, torch.Tensor], None] = None, tb_writer=None):
-        self.trained = True
-
-        if self.dtype == np.float32:
-            self._lobe = self._lobe.float()
-            self._lobe_timelagged = self._lobe_timelagged.float()
-        elif self.dtype == np.float64:
-            self._lobe = self._lobe.double()
-            self._lobe_timelagged = self._lobe_timelagged.double()
-
-        self.lobe.train()
-        self.lobe_timelagged.train()
-
-        assert isinstance(data, (list, tuple)) and len(data) == 2, \
-            "Data must be a list or tuple of batches belonging to instantaneous " \
-            "and respective time-lagged data."
-
-        batch_0, batch_t = data[0], data[1]
-
-        if isinstance(data[0], np.ndarray):
-            batch_0 = torch.from_numpy(
-                data[0].astype(
-                    self.dtype)).to(
-                device=self.device)
-        if isinstance(data[1], np.ndarray):
-            batch_t = torch.from_numpy(
-                data[1].astype(
-                    self.dtype)).to(
-                device=self.device)
-
-        self.optimizer.zero_grad()
-
-        n_feat_per_state = batch_0.shape[1] // self.multimer
-        batch_0 = torch.concat([torch.roll(batch_0, n_feat_per_state * i, 1) for i in range(self.multimer)])
-        batch_t = torch.concat([torch.roll(batch_t, n_feat_per_state * i, 1) for i in range(self.multimer)])
-
         x_0 = self.lobe(batch_0)
         x_t = self.lobe_timelagged(batch_t)
 
@@ -430,43 +424,15 @@ class VAMPNet_Multimer_Aug(VAMPNet):
             raise ValueError("This estimator contains no model yet, fit should be called first.")
         return model.transform(data, **kwargs)
 
+    def save(self, folder, n_epoch, rep=None):
+        if rep is None:
+            rep = 0
+            
+        pickle.dump(self,
+            open(f'{folder}/{self.__class__.__name__}/epoch_{n_epoch}_state_{self.n_states}_rep_{rep}.lobe', 'wb'))
 
-class VAMPNet_Multimer_NOSYM(VAMPNet):
-    def __init__(self,
-                 multimer: int,
-                 n_states: int,
-                 lobe: nn.Module, lobe_timelagged: Optional[nn.Module] = None,
-                 device=None, optimizer: Union[str, Callable] = 'Adam', learning_rate: float = 5e-4,
-                 score_method: str = 'VAMP2', score_mode: str = 'regularize', epsilon: float = 1e-6,
-                 dtype=np.float32,
-                 trained=False):
-        super().__init__(lobe,
-                         lobe_timelagged,
-                         device,
-                         optimizer,
-                         learning_rate,
-                         score_method,
-                         score_mode,
-                         epsilon,
-                         dtype)
 
-        self.multimer = multimer
-        self.n_states = n_states
-        self.trained = trained
-
-        """
-        try:
-            if self.multimer != self.lobe.module.multimer:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-            if self.n_states != self.lobe.module.n_states:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-        except AttributeError:
-            if self.multimer != self.lobe.multimer:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-            if self.n_states != self.lobe.n_states:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-        """
-        
+class VAMPNet_Multimer_AUG(VAMPNet_Multimer):        
     def partial_fit(self, data, train_score_callback: Callable[[
                     int, torch.Tensor], None] = None, tb_writer=None):
         self.trained = True
@@ -499,12 +465,22 @@ class VAMPNet_Multimer_NOSYM(VAMPNet):
                 device=self.device)
 
         self.optimizer.zero_grad()
+
+        n_feat_per_sub = batch_0.shape[1] // self.multimer
+
+        # augmenting training set by permutation
+        batch_0 = torch.concat([torch.roll(batch_0, n_feat_per_sub * i, 1) for i in range(self.multimer)])
+        batch_t = torch.concat([torch.roll(batch_t, n_feat_per_sub * i, 1) for i in range(self.multimer)])
+
         x_0 = self.lobe(batch_0)
         x_t = self.lobe_timelagged(batch_t)
 
-        x_0_aug = torch.concat([torch.roll(x_0, self.n_states * i, 1) for i in range(self.multimer)])
-        x_t_aug = torch.concat([torch.roll(x_t, self.n_states * i, 1) for i in range(self.multimer)])
-        loss_value = -vamp_score_nosym(x_0_aug, x_t_aug, symmetry_fold=self.multimer, method=self.score_method, epsilon=self.epsilon, mode=self.score_mode)
+        loss_value = vampnet_loss(
+            x_0,
+            x_t,
+            method=self.score_method,
+            epsilon=self.epsilon,
+            mode=self.score_mode)
 
         loss_value.backward()
         self.optimizer.step()
@@ -534,176 +510,10 @@ class VAMPNet_Multimer_NOSYM(VAMPNet):
                     [torch.roll(val, self.n_states * i, 1) for i in range(self.multimer)])
                 val_t_aug = torch.concat(
                     [torch.roll(val_t, self.n_states * i, 1) for i in range(self.multimer)])
-                score_value = vamp_score_nosym(
+                score_value = vamp_score(
                     val_aug,
                     val_t_aug,
-                    symmetry_fold=self.multimer,
                     method=self.score_method,
                     mode=self.score_mode,
                     epsilon=self.epsilon)
                 return score_value
-
-    def transform(self, data, **kwargs):
-        r""" Transforms data with the encapsulated model.
-
-        Parameters
-        ----------
-        data : array_like
-            Input data
-        **kwargs
-            Optional arguments.
-
-        Returns
-        -------
-        output : array_like
-            Transformed data.
-        """
-        if not self.trained:
-            warnings.warn( 'VAMPNet not trained yet. Please call fit first.')
-        model = self.fetch_model()
-        if model is None:
-            raise ValueError("This estimator contains no model yet, fit should be called first.")
-        return model.transform(data, **kwargs)
-
-
-def vamp_score_nosym(data: torch.Tensor, data_lagged: torch.Tensor, symmetry_fold: int, method='VAMP2', epsilon: float = 1e-6, mode='trunc'):
-    r"""Computes the VAMP score based on data and corresponding time-shifted data with symmetry.
-
-    Parameters
-    ----------
-    data : torch.Tensor
-        (N, d)-dimensional torch tensor
-    data_lagged : torch.Tensor
-        (N, k)-dimensional torch tensor
-    symmetry_fold : int
-        fold of symmetry
-    method : str, default='VAMP2'
-        The scoring method. See :meth:`score <deeptime.decomposition.CovarianceKoopmanModel.score>` for details.
-    epsilon : float, default=1e-6
-        Cutoff parameter for small eigenvalues, alternatively regularization parameter.
-    mode : str, default='trunc'
-        Regularization mode for Hermetian inverse. See :meth:`sym_inverse`.
-
-    Returns
-    -------
-    score : torch.Tensor
-        The score. It contains a contribution of :math:`+1` for the constant singular function since the
-        internally estimated Koopman operator is defined on a decorrelated basis set.
-    """
-    assert method in valid_score_methods, f"Invalid method '{method}', supported are {valid_score_methods}"
-    assert data.shape == data_lagged.shape, f"Data and data_lagged must be of same shape but were {data.shape} " \
-                                            f"and {data_lagged.shape}."
-    out = None
-    if method == 'VAMP1':
-        koopman = koopman_matrix_nosym(data, data_lagged, symmetry_fold, epsilon=epsilon, mode=mode)
-        out = torch.norm(koopman, p='nuc')
-    elif method == 'VAMP2':
-        koopman = koopman_matrix_nosym(data, data_lagged, symmetry_fold, epsilon=epsilon, mode=mode)
-        out = torch.pow(torch.norm(koopman, p='fro'), 2)
-    elif method == 'VAMPE':
-        c00, c0t, ctt = covariances(data, data_lagged, remove_mean=True)
-
-        if c00.shape[0] % symmetry_fold != 0:
-            raise ValueError(f"Number of features {c00.shape[0]} must" +
-                             f"be divisible by symmetry_fold {symmetry_fold}.")
-        subset_rank = c00.shape[0] // symmetry_fold
-
-        cov_00_blocks = []
-        cov_0t_blocks = []
-        cov_tt_blocks = []
-        for i in range(symmetry_fold):
-            cov_00_blocks.append(c00[:subset_rank,
-                                 i * subset_rank:(i + 1) * subset_rank])
-            cov_0t_blocks.append(c0t[:subset_rank,
-                                 i * subset_rank:(i + 1) * subset_rank])
-            cov_tt_blocks.append(ctt[:subset_rank,
-                                 i * subset_rank:(i + 1) * subset_rank])
-                             
-#        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
-#        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
-#        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
-        cov_00 = torch.sum(torch.stack(cov_00_blocks), axis=0)
-        cov_0t = torch.sum(torch.stack(cov_0t_blocks), axis=0)
-        cov_tt = torch.sum(torch.stack(cov_tt_blocks), axis=0)
-
-
-        c00_sqrt_inv = sym_inverse(cov_00, epsilon=epsilon, return_sqrt=True, mode=mode)
-        ctt_sqrt_inv = sym_inverse(cov_tt, epsilon=epsilon, return_sqrt=True, mode=mode)
-        koopman = multi_dot([c00_sqrt_inv, cov_0t, ctt_sqrt_inv]).t()
-
-        u, s, v = torch.svd(koopman)
-        mask = s > epsilon
-
-        u = torch.mm(c00_sqrt_inv, u[:, mask])
-        v = torch.mm(ctt_sqrt_inv, v[:, mask])
-        s = s[mask]
-
-        u_t = u.t()
-        v_t = v.t()
-        s = torch.diag(s)
-
-        out = torch.trace(
-            2. * multi_dot([s, u_t, cov_0t, v]) - multi_dot([s, u_t, cov_00, u, s, v_t, cov_tt, v])
-        )
-    assert out is not None
-    return 1 + out
-
-def koopman_matrix_nosym(x: torch.Tensor, y: torch.Tensor, symmetry_fold: int, epsilon: float = 1e-6, mode: str = 'trunc',
-                   c_xx: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
-    r""" Computes the Koopman matrix
-
-    .. math:: K = C_{00}^{-1/2}C_{0t}C_{tt}^{-1/2}
-
-    based on data over which the covariance matrices :math:`C_{\cdot\cdot}` are computed.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Instantaneous data.
-    y : torch.Tensor
-        Time-lagged data.
-    symmetry_fold : int
-        fold of symmetry
-    epsilon : float, default=1e-6
-        Cutoff parameter for small eigenvalues.
-    mode : str, default='trunc'
-        Regularization mode for Hermetian inverse. See :meth:`sym_inverse`.
-    c_xx : tuple of torch.Tensor, optional, default=None
-        Tuple containing c00, c0t, ctt if already computed.
-
-    Returns
-    -------
-    K : torch.Tensor
-        The Koopman matrix.
-    """
-    if c_xx is not None:
-        c00, c0t, ctt = c_xx
-    else:
-        c00, c0t, ctt = covariances(x, y, remove_mean=True)
-
-    if c00.shape[0] % symmetry_fold != 0:
-        raise ValueError(f"Number of features {c00.shape[0]} must" +
-                         f"be divisible by symmetry_fold {symmetry_fold}.")
-    subset_rank = c00.shape[0] // symmetry_fold
-
-    cov_00_blocks = []
-    cov_0t_blocks = []
-    cov_tt_blocks = []
-    for i in range(symmetry_fold):
-        cov_00_blocks.append(c00[:subset_rank,
-                                i * subset_rank:(i + 1) * subset_rank])
-        cov_0t_blocks.append(c0t[:subset_rank,
-                                i * subset_rank:(i + 1) * subset_rank])
-        cov_tt_blocks.append(ctt[:subset_rank,
-                                i * subset_rank:(i + 1) * subset_rank])
-                            
-#        cov_00 = covariances.cov_00[:subset_rank, :subset_rank]
-#        cov_0t = covariances.cov_0t[:subset_rank, :subset_rank]
-#        cov_tt = covariances.cov_tt[:subset_rank, :subset_rank]
-    cov_00 = torch.sum(torch.stack(cov_00_blocks), axis=0)
-    cov_0t = torch.sum(torch.stack(cov_0t_blocks), axis=0)
-    cov_tt = torch.sum(torch.stack(cov_tt_blocks), axis=0)
-
-    c00_sqrt_inv = sym_inverse(cov_00, return_sqrt=True, epsilon=epsilon, mode=mode)
-    ctt_sqrt_inv = sym_inverse(cov_tt, return_sqrt=True, epsilon=epsilon, mode=mode)
-    return multi_dot([c00_sqrt_inv, cov_0t, ctt_sqrt_inv]).t()

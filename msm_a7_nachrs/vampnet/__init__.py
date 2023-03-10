@@ -13,11 +13,20 @@ from .vampnet import (
             )
 
 from .vampnet_rev import (
-            VAMPNet_Multimer_Rev_Model,
-            VAMPNet_Multimer_Rev,
-            )
+            VAMPNet_Multimer_Rev
+)
 
-from .srv import (
-            VAMPNet_Multimer_Sym,
-            VAMPNet_Multimer_Sym_NOSYM
-            )
+from .vampnet_sum import (
+            VAMPNet_Multimer_SYM,
+            VAMPNet_Multimer_SYM_REV
+)
+
+#from .vampnet_rev import (
+#            VAMPNet_Multimer_Rev_Model,
+#            VAMPNet_Multimer_Rev,
+#            )
+
+#from .srv import (
+#            VAMPNet_Multimer_Sym,
+#            VAMPNet_Multimer_Sym_NOSYM
+#            )
