@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib.ticker import MultipleLocator
 import matplotlib.collections as clt

@@ -13,6 +13,9 @@ import MDAnalysis as mda
 import itertools
 import pandas as pd
 
+from lipyphilic.lib.memb_thickness import MembThickness
+from lipyphilic.lib.assign_leaflets import AssignLeaflets
+
 from ..util.utils import subunit_iter_dic
 
 domain_dict = {
@@ -503,3 +506,39 @@ class get_chol_contact_from_253(DaskChunkMdanalysis):
                 result_ts.append(np.asarray([[chl1.resid, np.min(distance_array(chl1.atoms, res.atoms))] for chl1 in chl1_ag]))
             result.append(result_ts)
         return result
+    
+class get_membrane_thickness(DaskChunkMdanalysis):
+    name = 'membrane_thickness'
+    universe_file = 'system'
+
+    def set_feature_info(self, universe):
+        return [f'membrane_thickness_grid_{i}_{j}' for i in range(50) for j in range(50)]
+
+    def run_analysis(self, universe, start, stop, step):
+        leaflets = AssignLeaflets(
+            universe=universe,
+            lipid_sel="name P N11"
+        )
+        leaflets.run(
+            start=start,
+            stop=stop,
+            step=step,
+            verbose=False
+        )
+
+        memb_thickness = MembThickness(
+            universe=universe,
+            leaflets=leaflets.filter_leaflets("resname POPC"),
+            lipid_sel="resname POPC and name P",
+            n_bins=50,
+            interpolate=True,
+            return_surface=True
+        )
+
+        memb_thickness.run(
+            start=start,
+            stop=stop,
+            step=step,
+            verbose=False
+            )
+        return memb_thickness.memb_thickness_grid.reshape(-1, 50*50)
