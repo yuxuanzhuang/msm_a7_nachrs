@@ -27,18 +27,18 @@ class SymVAMP(VAMP):
                  scaling: Optional[str] = None,
                  epsilon: float = 1e-6,
                  observable_transform: Callable[[np.ndarray], np.ndarray] = Identity()):
-        super(VAMP, self).__init__()
+        super().__init__(lagtime=lagtime,
+                         dim=dim,
+                         var_cutoff=var_cutoff,
+                         scaling=scaling,
+                         epsilon=epsilon,
+                         observable_transform=observable_transform)
         self.symmetry_fold = symmetry_fold
-        self.dim = dim
-        self.var_cutoff = var_cutoff
-        self.scaling = scaling
-        self.epsilon = epsilon
-        self.lagtime = lagtime
-        self.observable_transform = observable_transform
-        self._covariance_estimator = None  # internal covariance estimator
 
     _DiagonalizationResults = namedtuple("DiagonalizationResults", ['rank0', 'rankt', 'singular_values',
-                                                                    'left_singular_vecs', 'right_singular_vecs'])
+                                                                    'left_singular_vecs', 'right_singular_vecs',
+                                                                    'left_singular_vecs_full', 'right_singular_vecs_full',
+                                                                    'cov'])
 
     @staticmethod
     def _decomposition(covariances, epsilon, scaling, dim, var_cutoff, symmetry_fold) -> _DiagonalizationResults:
@@ -66,6 +66,10 @@ class SymVAMP(VAMP):
         cov_0t = np.sum(cov_0t_blocks, axis=0)
         cov_tt = np.sum(cov_tt_blocks, axis=0)
 
+        cov = CovarianceModel(cov_00=cov_00, cov_0t=cov_0t, cov_tt=cov_tt,
+                              mean_0=covariances.mean_0[:subset_rank],
+                              mean_t=covariances.mean_t[:subset_rank],)
+
         L0 = spd_inv_split(cov_00, epsilon=epsilon)
         rank0 = L0.shape[1] if L0.ndim == 2 else 1
         Lt = spd_inv_split(cov_tt, epsilon=epsilon)
@@ -88,7 +92,13 @@ class SymVAMP(VAMP):
             V *= s[np.newaxis, 0:m]  # scaled right singular functions induce a kinetic map wrt. backward propagator
 
         return SymVAMP._DiagonalizationResults(
-            rank0=rank0, rankt=rankt, singular_values=singular_values, left_singular_vecs=U, right_singular_vecs=V
+            rank0=rank0, rankt=rankt,
+            singular_values=singular_values,
+            left_singular_vecs_full=np.tile(U, symmetry_fold),
+            right_singular_vecs_full=np.tile(V, symmetry_fold),
+            left_singular_vecs=U,
+            right_singular_vecs=V,
+            cov=cov
         )
 
     def _decompose(self, covariances: CovarianceModel):
@@ -96,10 +106,17 @@ class SymVAMP(VAMP):
         decomposition = self._decomposition(covariances, self.epsilon, self.scaling, self.dim, self.var_cutoff,
                                             self.symmetry_fold)
         return SymCovarianceKoopmanModel(
-            self.symmetry_fold,
-            decomposition.left_singular_vecs, decomposition.singular_values, decomposition.right_singular_vecs,
-            rank_0=decomposition.rank0, rank_t=decomposition.rankt, dim=self.dim,
-            var_cutoff=self.var_cutoff, cov=covariances, scaling=self.scaling, epsilon=self.epsilon,
+            symmetrty_fold=self.symmetry_fold,
+            instantaneous_coefficients=decomposition.left_singular_vecs,
+            singular_values=decomposition.singular_values,
+            timelagged_coefficients=decomposition.right_singular_vecs,
+            instantaneous_coefficients_full=decomposition.left_singular_vecs_full,
+            timelagged_coefficients_full=decomposition.right_singular_vecs_full,
+            rank_0=decomposition.rank0, rank_t=decomposition.rankt,
+            dim=self.dim, var_cutoff=self.var_cutoff,
+            cov=decomposition.cov,
+            cov_full=covariances,
+            scaling=self.scaling, epsilon=self.epsilon,
             instantaneous_obs=self.observable_transform,
             timelagged_obs=self.observable_transform
         )
@@ -177,6 +194,14 @@ class SymTICA(TICA, SymVAMP):
         cov_0t = np.sum(cov_0t_blocks, axis=0)
         cov_tt = np.sum(cov_tt_blocks, axis=0)
 
+        cov = CovarianceModel(cov_00=cov_00, cov_0t=cov_0t, cov_tt=cov_tt,
+                              mean_0=covariances.mean_0[:subset_rank],
+                              mean_t=covariances.mean_t[:subset_rank],
+                              bessels_correction=covariances.bessels_correction,
+                              symmetrized=covariances.symmetrized,
+                              lagtime=covariances.lagtime,
+                              data_mean_removed=covariances.data_mean_removed)
+
         
         from deeptime.numeric import ZeroRankError
 
@@ -199,8 +224,13 @@ class SymTICA(TICA, SymVAMP):
             eigenvectors *= np.sqrt(regularized_timescales / 2)
 
         return SymVAMP._DiagonalizationResults(
-            rank0=rank, rankt=rank, singular_values=eigenvalues,
-            left_singular_vecs=eigenvectors, right_singular_vecs=eigenvectors
+            rank0=rank, rankt=rank,
+            singular_values=eigenvalues,
+            left_singular_vecs_full=np.tile(eigenvectors, symmetry_fold),
+            right_singular_vecs_full=np.tile(eigenvectors, symmetry_fold),
+            left_singular_vecs=eigenvectors,
+            right_singular_vecs=eigenvectors,
+            cov=cov
         )
 
 
@@ -235,29 +265,94 @@ class SymWhiteningTransform(Observable):
         if nosum:
             return x @ self.sqrt_inv_cov[..., :self.dim]
         return np.sum(x @ self.sqrt_inv_cov[..., :self.dim], axis=1)
+    
+class SymWhiteningTransform_Multimer(Observable):
+    r""" Transformation of symmetric data into a whitened space.
+    It is assumed that for a covariance matrix :math:`C` the
+    square-root inverse :math:`C^{-1/2}` was already computed. Optionally a mean :math:`\mu` can be provided.
+    This yields the transformation
+    .. math::
+        y = C^{-1/2}(x-\mu).
+    Parameters
+    ----------
+    sqrt_inv_cov : (n, k) ndarray
+        Square-root inverse of covariance matrix.
+    mean : (n, ) ndarray, optional, default=None
+        The mean if it should be subtracted.
+    dim : int, optional, default=None
+        Additional restriction in the dimension, removes all but the first `dim` components of the output.
+    See Also
+    --------
+    deeptime.numeric.spd_inv_sqrt : Method to obtain (regularized) inverses of covariance matrices.
+    """
+
+    def __init__(self, sqrt_inv_cov: np.ndarray, mean: Optional[np.ndarray] = None, dim: Optional[int] = None):
+        self.sqrt_inv_cov = sqrt_inv_cov
+        self.mean = mean
+        self.dim = dim
+
+    def _evaluate(self, x: np.ndarray):
+        if self.mean is not None:
+            x = x - self.mean
+        return x @ self.sqrt_inv_cov[..., :self.dim]
 
 
 class SymCovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
     """
     Symmetric transformation version of Covariance Koopman Model
     """
-    def __init__(self, symmetrty_fold, instantaneous_coefficients, singular_values, timelagged_coefficients, cov,
-                rank_0: int, rank_t: int, dim=None, var_cutoff=None, scaling=None, epsilon=1e-10,
-                instantaneous_obs: Callable[[np.ndarray], np.ndarray] = Identity(),
-                timelagged_obs: Callable[[np.ndarray], np.ndarray] = Identity()):
+    def __init__(self,
+                 symmetrty_fold,
+                 instantaneous_coefficients,
+                 singular_values,
+                 timelagged_coefficients,
+                 instantaneous_coefficients_full,
+                 timelagged_coefficients_full,
+                 cov,
+                 cov_full,
+                 rank_0: int, rank_t: int,
+                 dim=None, var_cutoff=None, scaling=None, epsilon=1e-10,
+                 instantaneous_obs: Callable[[np.ndarray], np.ndarray] = Identity(),
+                 timelagged_obs: Callable[[np.ndarray], np.ndarray] = Identity()):
 
         self.symmetry_fold = symmetrty_fold
         self._whitening_instantaneous = SymWhiteningTransform(instantaneous_coefficients,
-                                                            cov.mean_0[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
+                                             cov.mean_0[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
         self._whitening_timelagged = SymWhiteningTransform(timelagged_coefficients,
-                                                        cov.mean_t[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
+                                             cov.mean_t[:timelagged_coefficients.shape[0]] if cov.data_mean_removed else None)
+
+        self._whitening_instantaneous_full = SymWhiteningTransform(instantaneous_coefficients_full,
+                                             cov_full.mean_0[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
+        self._whitening_timelagged_full = SymWhiteningTransform(timelagged_coefficients_full,
+                                             cov_full.mean_t[:timelagged_coefficients_full.shape[0]] if cov.data_mean_removed else None)
         TransferOperatorModel.__init__(self, np.diag(singular_values),
-                            Concatenation(self._whitening_instantaneous, instantaneous_obs),
-                            Concatenation(self._whitening_timelagged, timelagged_obs))
+                            Concatenation_Multimer(self._whitening_instantaneous,
+                                                   instantaneous_obs,
+                                                   self.symmetry_fold),
+                            Concatenation_Multimer(self._whitening_timelagged,
+                                                   timelagged_obs,
+                                                   self.symmetry_fold))
+        self._whitening_instantaneous_sub = SymWhiteningTransform_Multimer(instantaneous_coefficients,
+                                                                           cov.mean_0[:instantaneous_coefficients.shape[0]] if cov.data_mean_removed else None)
+        self._whitening_timelagged_sub = SymWhiteningTransform_Multimer(timelagged_coefficients,
+                                                                        cov.mean_t[:timelagged_coefficients.shape[0]] if cov.data_mean_removed else None)
+        
+        self.instantaneous_obs_sub = Concatenation_Multimer(
+                                        self._whitening_instantaneous_sub,
+                                        instantaneous_obs,
+                                        self.symmetry_fold)
+        self.timelagged_obs_sub = Concatenation_Multimer(
+                                        self._whitening_timelagged_sub,
+                                        timelagged_obs,
+                                        self.symmetry_fold)
+
         self._instantaneous_coefficients = instantaneous_coefficients
         self._timelagged_coefficients = timelagged_coefficients
+        self._instantaneous_coefficients_full = instantaneous_coefficients_full
+        self._timelagged_coefficients_full = timelagged_coefficients_full
         self._singular_values = singular_values
         self._cov = cov
+        self._cov_full = cov_full
 
         self._scaling = scaling
         self._epsilon = epsilon
@@ -268,9 +363,35 @@ class SymCovarianceKoopmanModel(CovarianceKoopmanModel, TransferOperatorModel):
         self._update_output_dimension()
     
     def transform(self, data: np.ndarray, **kw):
-        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
+#        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
         return self.instantaneous_obs(data)
     
     def transform_subunit(self, data: np.ndarray, **kw):
-        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
-        return self._whitening_instantaneous._evaluate(data, nosum=True).reshape(data.shape[0], self.symmetry_fold, -1)
+#        data = data.reshape(data.shape[0], self.symmetry_fold, -1)
+        return self.instantaneous_obs_sub(data).reshape(data.shape[0], self.symmetry_fold, -1)
+    
+
+class Concatenation_Multimer(Concatenation):
+    r"""Concatenation operation to evaluate :math:`(f_1 \circ f_2)(x) = f_1(f_2(x))`, where
+    :math:`f_1` and :math:`f_2` are observables.
+
+    Parameters
+    ----------
+    obs1 : Callable
+        First observable :math:`f_1`.
+    obs2 : Callable
+        Second observable :math:`f_2`.
+    """
+
+    def __init__(self,
+                 obs1: Callable[[np.ndarray], np.ndarray],
+                 obs2: Callable[[np.ndarray], np.ndarray],
+                 symmetry_fold: int):
+        self.obs1 = obs1
+        self.obs2 = obs2
+        self.symmetry_fold = symmetry_fold
+
+    def _evaluate(self, x: np.ndarray) -> np.ndarray:
+        result = self.obs2(x)
+        result = result.reshape(result.shape[0], self.symmetry_fold, -1)
+        return self.obs1(result)

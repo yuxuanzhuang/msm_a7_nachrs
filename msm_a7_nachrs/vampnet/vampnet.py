@@ -36,7 +36,7 @@ from deeptime.util.torch import disable_TF32, map_data, multi_dot
 from sklearn import preprocessing
 from scipy.stats import rankdata
 from ..tica.sym_tica import SymTICA
-
+from .score import vamp_score_sym, vamp_score_rev
 
 class VAMPNETInitializer(MSMInitializer):
     prefix = "vampnet"
@@ -61,18 +61,18 @@ class VAMPNETInitializer(MSMInitializer):
 
             self.dataset = TrajectoriesDataset.from_numpy(lagtime=self.lag,
                                                           data=self.feature_trajectories)
-
             if not self.symmetrize:
                 self.dataset_sym = MultimerTrajectoriesDataset.from_numpy(
                             self.lag, self.multimer, self.feature_trajectories)
-
             if self.dumping:
                 self.dump_feature_trajectories()
 
+#            print('The VAMPNETInitializer cannot be saved')
 #                with open(self.filename + 'vampnet_init.pickle', 'wb') as f:
 #                    pickle.dump(self, f)
         else:
             print('Load old VAMPNET results')
+
 #            self = pickle.load(open(self.filename + 'vampnet_init.pickle', 'rb'))
 
     @property
@@ -290,10 +290,14 @@ class VAMPNet_Multimer(VAMPNet):
     def __init__(self,
                  multimer: int,
                  n_states: int,
+                 lobe: nn.Module,
+                 sym: bool = False,
                  rep: int = 0,
-                 lobe: nn.Module, lobe_timelagged: Optional[nn.Module] = None,
+                 lobe_timelagged: Optional[nn.Module] = None,
                  device=None, optimizer: Union[str, Callable] = 'Adam', learning_rate: float = 5e-4,
-                 score_method: str = 'VAMP2', score_mode: str = 'regularize', epsilon: float = 1e-6,
+                 score_method: str = 'VAMP2',
+                 score_mode: str = 'regularize',
+                 epsilon: float = 1e-6,
                  dtype=np.float32,
                  trained=False):
         super().__init__(lobe,
@@ -311,23 +315,18 @@ class VAMPNet_Multimer(VAMPNet):
         self.rep = rep
         self.trained = trained
 
-        """
-        try:
-            if self.multimer != self.lobe.module.multimer:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-            if self.n_states != self.lobe.module.n_states:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-        except AttributeError:
-            if self.multimer != self.lobe.multimer:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-            if self.n_states != self.lobe.n_states:
-                raise ValueError('Mismatch multimer between vampnet and lobe')
-        """
-        
-    def partial_fit(self, data, train_score_callback: Callable[[
-                    int, torch.Tensor], None] = None, tb_writer=None):
-        self.trained = True
+        # if the output is symmetric over subunits,
+        # set sym to True
+        self.sym = sym
 
+        if self.sym:
+            self._train_scores_full = []
+            self._validation_scores_full = []
+            self._train_scores_deg = []
+            self._validation_scores_deg = []
+
+    def prepare_partial_fit(self):
+        self.trained = True
         if self.dtype == np.float32:
             self._lobe = self._lobe.float()
             self._lobe_timelagged = self._lobe_timelagged.float()
@@ -337,6 +336,10 @@ class VAMPNet_Multimer(VAMPNet):
 
         self.lobe.train()
         self.lobe_timelagged.train()
+        
+    def partial_fit(self, data, train_score_callback: Callable[[
+                    int, torch.Tensor], None] = None, tb_writer=None):
+        self.prepare_partial_fit()
 
         assert isinstance(data, (list, tuple)) and len(data) == 2, \
             "Data must be a list or tuple of batches belonging to instantaneous " \
@@ -369,18 +372,57 @@ class VAMPNet_Multimer(VAMPNet):
         loss_value.backward()
         self.optimizer.step()
 
+        if self.sym:
+            score_value_full = -vampnet_loss(
+                x_0,
+                x_t,
+                method=self.score_method,
+                epsilon=self.epsilon,
+                mode=self.score_mode)
+            score_value_deg = vamp_score_sym(
+                x_0,
+                x_t,
+                symmetry_fold=self.multimer,
+                method=self.score_method,
+                epsilon=self.epsilon,
+                mode=self.score_mode)
+        else:
+            loss_value_full = None
+            loss_value_deg = None
+        self.append_training_score(self._step,
+                                   -loss_value,
+                                   score_value_full,
+                                   score_value_deg)
+
         if train_score_callback is not None:
             lval_detached = loss_value.detach()
             train_score_callback(self._step, -lval_detached)
         if tb_writer is not None:
             tb_writer.add_scalars('Loss', {'train': loss_value.item()}, self._step)
             tb_writer.add_scalars('VAMPE', {'train': -loss_value.item()}, self._step)
-        self._train_scores.append((self._step, (-loss_value).item()))
         self._step += 1
 
         return self
+    
+    def append_training_score(self, step,
+                     score,
+                     score_full=None,
+                     score_deg=None):
+        self._train_scores.append((step, score.item()))
+        if self.sym:
+            self._train_scores_full.append((step, score_full.item()))
+            self._train_scores_deg.append((step, score_deg.item()))
 
-    def validate(self, validation_data: Tuple[torch.Tensor]) -> torch.Tensor:
+    def append_validation_score(self, step,
+                        score,
+                        score_full=None,
+                        score_deg=None):
+        self._validation_scores.append((step, score.item()))
+        if self.sym:
+            self._validation_scores_full.append((step, score_full.item()))
+            self._validation_scores_deg.append((step, score_deg.item()))
+
+    def validate(self, validation_data: Tuple[torch.Tensor]):
 
         with disable_TF32():
             self.lobe.eval()
@@ -400,6 +442,21 @@ class VAMPNet_Multimer(VAMPNet):
                     method=self.score_method,
                     mode=self.score_mode,
                     epsilon=self.epsilon)
+                if self.sym:
+                    score_value_full = vamp_score(
+                        val,
+                        val_t,
+                        method=self.score_method,
+                        mode=self.score_mode,
+                        epsilon=self.epsilon)
+                    score_value_deg = vamp_score_sym(
+                        val_aug,
+                        val_t,
+                        symmetry_fold=self.multimer,
+                        method=self.score_method,
+                        mode=self.score_mode,
+                        epsilon=self.epsilon)
+                    return score_value, score_value_full, score_value_deg
                 return score_value
 
     def transform(self, data, **kwargs):
@@ -423,7 +480,122 @@ class VAMPNet_Multimer(VAMPNet):
         if model is None:
             raise ValueError("This estimator contains no model yet, fit should be called first.")
         return model.transform(data, **kwargs)
+    
+    def fit(self,
+            data_loader: "torch.utils.data.DataLoader",
+            n_epochs=1,
+            validation_loader=None,
+            train_score_callback: Callable[[int, "torch.Tensor"], None] = None,
+            validation_score_callback: Callable[[int, "torch.Tensor"], None] = None,
+            progress=None,
+            early_stopping_patience=None,
+            early_stopping_threshold=0.0,
+            **kwargs):
+        r""" Fits a VampNet on data with early stopping.
 
+        Parameters
+        ----------
+        data_loader : torch.utils.data.DataLoader
+            The data to use for training. Should yield a tuple of batches representing
+            instantaneous and time-lagged samples.
+        n_epochs : int, default=1
+            The number of epochs (i.e., passes through the training data) to use for training.
+        validation_loader : torch.utils.data.DataLoader, optional, default=None
+            Validation data, should also be yielded as a two-element tuple.
+        train_score_callback : callable, optional, default=None
+            Callback function which is invoked after each batch and gets as arguments the current training step
+            as well as the score (as torch Tensor).
+        validation_score_callback : callable, optional, default=None
+            Callback function for validation data. Is invoked after each epoch if validation data is given
+            and the callback function is not None. Same as the train callback, this gets the 'step' as well as
+            the score.
+        progress : context manager, optional, default=None
+            Progress bar (eg tqdm), defaults to None.
+        early_stopping_patience : int, optional, default=None
+            If given, the training will stop after the given number of epochs without improvement of the
+            validation score. If None, no early stopping is performed.
+        early_stopping_threshold : float, optional, default=0.0
+            The training will stop if the validation score does not improve by at least the given
+            threshold.
+        **kwargs
+            Optional keyword arguments for scikit-learn compatibility
+
+        Returns
+        -------
+        self : VAMPNet
+            Reference to self.
+        """
+        print("VAMPNet training with {} epochs".format(n_epochs))
+        print("Early stopping patience: {}".format(early_stopping_patience))
+        print("Early stopping threshold: {}".format(early_stopping_threshold))
+
+        from deeptime.util.platform import handle_progress_bar
+        progress = handle_progress_bar(progress)
+        self._step = 0
+
+        self.early_stopping_patience = early_stopping_patience
+        self.early_stopping_threshold = early_stopping_threshold
+        self.best_validation_score = -np.inf
+        self.best_validation_score_epoch = 0
+        self.best_model = None
+
+        # and train
+        with disable_TF32():
+            for _ in progress(range(n_epochs),
+                              desc="VAMPNet epoch",
+                              total=n_epochs,
+                              leave=False):
+                for batch_0, batch_t in data_loader:
+                    self.partial_fit((batch_0.to(device=self.device),
+                                      batch_t.to(device=self.device)),
+                                     train_score_callback=train_score_callback)
+                if validation_loader is not None:
+                    with torch.no_grad():
+                        scores = []
+                        if self.sym:
+                            scores_full = []
+                            scores_deg = []
+                        for val_batch in validation_loader:
+                            if self.sym:
+                                val_score, val_score_full, val_score_deg = self.validate(
+                                    (val_batch[0].to(device=self.device),
+                                     val_batch[1].to(device=self.device)))
+                                scores.append(val_score)
+                                scores_full.append(val_score_full)
+                                scores_deg.append(val_score_deg)
+                            else:
+                                val_score = self.validate((val_batch[0].to(device=self.device),
+                                                           val_batch[1].to(device=self.device)))
+                                scores.append(val_score)
+                        mean_score = torch.mean(torch.stack(scores))
+                        if self.sym:
+                            mean_score_full = torch.mean(torch.stack(scores_full))
+                            mean_score_deg = torch.mean(torch.stack(scores_deg))
+                        else:
+                            mean_score_full = None
+                            mean_score_deg = None
+                        self.append_validation_score(
+                                                     self._step,
+                                                     mean_score,
+                                                     mean_score_full,
+                                                     mean_score_deg)
+                        if validation_score_callback is not None:
+                            validation_score_callback(self._step, mean_score)
+
+                        if mean_score > self.best_validation_score + early_stopping_threshold:
+                            self.best_validation_score = mean_score
+                            self.best_validation_score_epoch = self._step
+                            self.best_model = self.fetch_model()
+                        if early_stopping_patience is not None:
+                            if self._step - self.best_validation_score_epoch > early_stopping_patience:
+                                self._lobe = self.best_model._lobe
+                                self._lobe_timelagged = self.best_model._lobe_timelagged
+                                self._step = self.best_validation_score_epoch
+                                print("Early stopping after {} epochs without improvement.".format(early_stopping_patience))
+                                print("Best validation score: {}".format(self.best_validation_score))
+                                return self
+        return self
+    
     def save(self, folder, n_epoch, rep=None):
         if rep is None:
             rep = 0
@@ -435,17 +607,7 @@ class VAMPNet_Multimer(VAMPNet):
 class VAMPNet_Multimer_AUG(VAMPNet_Multimer):        
     def partial_fit(self, data, train_score_callback: Callable[[
                     int, torch.Tensor], None] = None, tb_writer=None):
-        self.trained = True
-
-        if self.dtype == np.float32:
-            self._lobe = self._lobe.float()
-            self._lobe_timelagged = self._lobe_timelagged.float()
-        elif self.dtype == np.float64:
-            self._lobe = self._lobe.double()
-            self._lobe_timelagged = self._lobe_timelagged.double()
-
-        self.lobe.train()
-        self.lobe_timelagged.train()
+        self.prepare_partial_fit()
 
         assert isinstance(data, (list, tuple)) and len(data) == 2, \
             "Data must be a list or tuple of batches belonging to instantaneous " \
@@ -485,18 +647,39 @@ class VAMPNet_Multimer_AUG(VAMPNet_Multimer):
         loss_value.backward()
         self.optimizer.step()
 
+        if self.sym:
+            score_value_full = -vampnet_loss(
+                x_0,
+                x_t,
+                method=self.score_method,
+                epsilon=self.epsilon,
+                mode=self.score_mode)
+            score_value_deg = vamp_score_sym(
+                x_0,
+                x_t,
+                symmetry_fold=self.multimer,
+                method=self.score_method,
+                epsilon=self.epsilon,
+                mode=self.score_mode)
+        else:
+            loss_value_full = None
+            loss_value_deg = None
+        self.append_training_score(self._step,
+                                   -loss_value,
+                                   score_value_full,
+                                   score_value_deg)
+        
         if train_score_callback is not None:
             lval_detached = loss_value.detach()
             train_score_callback(self._step, -lval_detached)
         if tb_writer is not None:
             tb_writer.add_scalars('Loss', {'train': loss_value.item()}, self._step)
             tb_writer.add_scalars('VAMPE', {'train': -loss_value.item()}, self._step)
-        self._train_scores.append((self._step, (-loss_value).item()))
         self._step += 1
 
         return self
 
-    def validate(self, validation_data: Tuple[torch.Tensor]) -> torch.Tensor:
+    def validate(self, validation_data: Tuple[torch.Tensor]):
 
         with disable_TF32():
             self.lobe.eval()
@@ -516,4 +699,20 @@ class VAMPNet_Multimer_AUG(VAMPNet_Multimer):
                     method=self.score_method,
                     mode=self.score_mode,
                     epsilon=self.epsilon)
+                if self.sym:
+                    score_value_full = vamp_score(
+                        val_aug,
+                        val_t_aug,
+                        method=self.score_method,
+                        mode=self.score_mode,
+                        epsilon=self.epsilon)
+                    score_value_deg = vamp_score_sym(
+                        val_aug,
+                        val_t_aug,
+                        symmetry_fold=self.multimer,
+                        method=self.score_method,
+                        mode=self.score_mode,
+                        epsilon=self.epsilon)
+                    return score_value, score_value_full, score_value_deg
+
                 return score_value
