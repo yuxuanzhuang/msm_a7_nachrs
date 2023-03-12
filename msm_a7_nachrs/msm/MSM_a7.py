@@ -431,7 +431,7 @@ class MSMInitializer(object):
         plt.show()
 
         
-    def get_ck_test(self, n_states, lag, mlags=6, lag_max=300, n_jobs=6, n_samples=20, updating=False):
+    def get_ck_test(self, n_states, lag, mlags=6, n_jobs=6, n_samples=20, updating=False):
         if not updating and not self.rerun_msm and (os.path.isfile(self.cluster_filename +
                                                                    f'_deeptime_cktest.pickle')):
             print('Loading old CK test')
@@ -441,11 +441,11 @@ class MSMInitializer(object):
                     f'_deeptime_cktest.pickle',
                     'rb'))
             
-        if (n_states, lag, lag_max, mlags) not in self.ck_test:            
+        if (n_states, lag, mlags) not in self.ck_test or updating:            
             print('CK models building')
             model =  BayesianMSM(n_samples=n_samples).fit_fetch(TransitionCountEstimator(lagtime=lag,
                                                         count_mode='effective').fit_fetch(self.cluster_dtrajs))
-            lagtimes = np.linspace(1, lag_max, mlags).astype(int)
+            lagtimes = np.arange(1, mlags+1) * lag
             print('Estimating lagtimes', lagtimes)
 
             if n_jobs != 1:
@@ -458,7 +458,7 @@ class MSMInitializer(object):
                     counts = TransitionCountEstimator(lagtime=lagtime, count_mode='effective').fit_fetch(self.cluster_dtrajs)
                     test_models.append(BayesianMSM(n_samples=n_samples).fit_fetch(counts))
             print('Start CK test')
-            self.ck_test[n_states, lag, lag_max, mlags] = {
+            self.ck_test[n_states, lag, mlags] = {
                     'model': model,
                     'ck_test': model.ck_test(test_models, n_states, progress=tqdm),
                     'models': test_models
@@ -470,7 +470,7 @@ class MSMInitializer(object):
                         f'_deeptime_cktest.pickle',
                         'wb'))
             
-        return plot_ck_test(self.ck_test[n_states, lag, lag_max, mlags]['ck_test'])
+        return plot_ck_test(self.ck_test[n_states, lag, mlags]['ck_test'])
 
 
     def get_maximum_likelihood_msm(self, lag, cluster='deeptime', updating=False):

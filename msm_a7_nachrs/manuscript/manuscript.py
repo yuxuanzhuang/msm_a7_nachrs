@@ -38,6 +38,23 @@ colors = [(1, 1, 1), (0.78, 0.56, 0.32), (0.65, 0.38, 0.10)]
 cmap_name = 'desensitized'
 cmap_de_light = LinearSegmentedColormap.from_list(cmap_name, colors, N=100)
 
+struc_2_state = {
+    'EPJPNU': 'open',
+    'BGT': 'closed',
+    'EPJ': 'desensitized',
+}
+state_color_dict = {
+    'open': '#3F5C76',
+    'closed': '#656855',
+    'desensitized': '#C78E52',
+    'I': '#4A235A',
+    'flipped': '#4DB6AC'
+    }
+
+system_color_dict = {
+    'apo': '#FB3640',
+    'cholesterol': '#80BF42'
+    }
 
 def set_axis_boarder(ax):
     ax.spines['top'].set_linewidth(4)

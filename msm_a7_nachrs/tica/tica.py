@@ -147,6 +147,7 @@ class TICAInitializer(MSMInitializer):
     def transform_feature_trajectories(self, md_dataframe,
                                        start=0, end=-1,
                                        system_exclusion=[],
+                                       symmetrized=True,
                                        subunit=False) -> List[np.ndarray]:
         """
         Map new feature trajectories to the TICA space.
@@ -177,7 +178,10 @@ class TICAInitializer(MSMInitializer):
                 feature_trajectory.append(raw_data)
 
             feature_trajectory = np.concatenate(feature_trajectory, axis=2).reshape(raw_data.shape[0], -1)
-            feature_trajectories = get_symmetrized_data([feature_trajectory], self.multimer)
+            if symmetrized:
+                feature_trajectories = get_symmetrized_data([feature_trajectory], self.multimer)
+            else:
+                feature_trajectories = [feature_trajectory]
             for single_traj in feature_trajectories:
                 if subunit:
                     mapped_feature_trajectories.append(self.tica.transform_subunit(single_traj))
@@ -259,7 +263,7 @@ class SymTICAInitializer(TICAInitializer):
                     self.gather_feature_matrix()
 
                 self.tica = SymTICA(symmetry_fold=self.multimer,
-                            var_cutoff=0.8, dim=6, lagtime=self.lag)
+                            var_cutoff=0.8, dim=10, lagtime=self.lag)
                 self.tica.fit(self.feature_trajectories)
                 pickle.dump(self.tica,
                 open(
@@ -269,21 +273,21 @@ class SymTICAInitializer(TICAInitializer):
                 if n_jobs != 1:
                     print('transforming feature trajectories')
                     with tqdm_joblib(tqdm(desc="Transform features", total=len(self.feature_trajectories))) as progress_bar:
-                        self.tica_output = Parallel(n_jobs=n_jobs)(delayed(self.tica_transform)(self.tica, feature_traj) for feature_traj in self.feature_trajectories)
+                        self.tica_output = Parallel(n_jobs=n_jobs)(delayed(self.tica_transform)(self.tica, feature_traj) for feature_traj in self.feature_trajectories[::self.multimer])
                     print('transforming subunit feature trajectories')
                     with tqdm_joblib(tqdm(desc="Transform features subunits", total=len(self.feature_trajectories))) as progress_bar:
-                        self.tica_subunit_output = Parallel(n_jobs=n_jobs)(delayed(self.tica_transform_subunit)(self.tica, feature_traj) for feature_traj in self.feature_trajectories)
+                        self.tica_subunit_output = Parallel(n_jobs=n_jobs)(delayed(self.tica_transform_subunit)(self.tica, feature_traj) for feature_traj in self.feature_trajectories[::self.multimer])
                 else:
                     print('transforming feature trajectories')
                     self.tica_output = []
                     self.tica_subunit_output = []
-                    for feature_traj in tqdm(self.feature_trajectories, desc='Transforming feature trajectories'):
+                    for feature_traj in tqdm(self.feature_trajectories[::self.multimer], desc='Transforming feature trajectories'):
                         self.tica_output.append(self.tica_transform(self.tica, feature_traj))
                         self.tica_subunit_output.append(self.tica_transform_subunit(self.tica, feature_traj))
 
             else:
                 self.tica = SymTICA(symmetry_fold=self.multimer,
-                            var_cutoff=0.8, dim=6, lagtime=self.lag)
+                            var_cutoff=0.8, dim=10, lagtime=self.lag)
                 self.partial_fit_tica(block_size=block_size)
                 _ = self.tica.fetch_model()
                 pickle.dump(self.tica,
@@ -291,11 +295,16 @@ class SymTICAInitializer(TICAInitializer):
                     self.filename +
                     'sym_tica.pickle',
                     'wb'))
-                self.tica_output = self.transform_feature_trajectories(self.md_dataframe,
-                                        start=self.start)
+                self.tica_output = self.transform_feature_trajectories(
+                                        self.md_dataframe,
+                                        start=self.start,
+                                        symmetrized=False)
                 self.tica_subunit_output = self.transform_feature_trajectories(self.md_dataframe,
-                                        start=self.start, subunit=True)
+                                        start=self.start,
+                                        subunit=True,
+                                        symmetrized=False)
             self.tica_concatenated = np.concatenate(self.tica_output)
+            self.tica_subunit_concatenated = np.concatenate(self.tica_subunit_output)
 
             pickle.dump(
                 self.tica_output,
@@ -309,8 +318,6 @@ class SymTICAInitializer(TICAInitializer):
                     self.filename +
                     'output_subunit.pickle',
                     'wb'))
-#            if self.in_memory:
-#                self.dump_feature_trajectories()
             gc.collect()
 
         else:
@@ -322,3 +329,4 @@ class SymTICAInitializer(TICAInitializer):
             self.tica_subunit_output = pickle.load(
                 open(self.filename + 'output_subunit.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
+            self.tica_subunit_concatenated = np.concatenate(self.tica_subunit_output)

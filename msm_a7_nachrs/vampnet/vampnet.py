@@ -422,6 +422,39 @@ class VAMPNet_Multimer(VAMPNet):
             self._validation_scores_full.append((step, score_full.item()))
             self._validation_scores_deg.append((step, score_deg.item()))
 
+    @property
+    def train_scores_full(self) -> np.ndarray:
+        r""" The collected train scores for full mat. First dimension contains the step, second dimension the score. Initially empty.
+
+        :type: (T, 2) ndarray
+        """
+        return np.array(self._train_scores_full)
+    
+    @property
+    def train_scores_deg(self) -> np.ndarray:
+        r""" The collected train scores for degenerated mat. First dimension contains the step, second dimension the score. Initially empty.
+
+        :type: (T, 2) ndarray
+        """
+        return np.array(self._train_scores_deg)
+
+    @property
+    def validation_scores_full(self) -> np.ndarray:
+        r""" The collected validation scores for full mat. First dimension contains the step, second dimension the score.
+        Initially empty.
+
+        :type: (T, 2) ndarray
+        """
+        return np.array(self._validation_scores_full)
+    @property
+    def validation_scores_deg(self) -> np.ndarray:
+        r""" The collected validation scores for degenerated mat. First dimension contains the step, second dimension the score.
+        Initially empty.
+
+        :type: (T, 2) ndarray
+        """
+        return np.array(self._validation_scores_deg)
+    
     def validate(self, validation_data: Tuple[torch.Tensor]):
 
         with disable_TF32():
