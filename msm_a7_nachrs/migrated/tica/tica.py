@@ -330,3 +330,59 @@ class SymTICAInitializer(TICAInitializer):
                 open(self.filename + 'output_subunit.pickle', 'rb'))
             self.tica_concatenated = np.concatenate(self.tica_output)
             self.tica_subunit_concatenated = np.concatenate(self.tica_subunit_output)
+
+
+    def get_correlation(self, feature, max_tic=3, stride=1):
+        """
+        Get the correlation between the feature and the TICA components.
+        """
+        feature_dataframe = self.md_dataframe.get_feature([feature])
+
+        feature_data_concat = feature_dataframe[feature_dataframe.traj_time >= self.start \
+        * self.dt * 1000].iloc[:, 4:].values
+        tica_concat = np.concatenate([tica_traj[:, :max_tic] for tica_traj in \
+        self.tica_output], axis=0)
+        test_feature_TIC_correlation = np.zeros((feature_data_concat.shape[1], max_tic))
+        for i in tqdm(range(feature_data_concat.shape[1]), total=feature_data_concat.shape[1]):
+            for j in range(max_tic):
+                test_feature_TIC_correlation[i, j] = pearsonr(
+                    feature_data_concat[::stride, i], tica_concat[::stride, j])[0]
+
+        test_feature_TIC_correlation_df = pd.DataFrame(
+            test_feature_TIC_correlation,
+            columns=['TIC' + str(i) for i in range(1, max_tic + 1)],
+            index=feature_dataframe.columns[4:])
+
+        del feature_dataframe
+        del feature_data_concat
+        gc.collect()
+
+        return test_feature_TIC_correlation_df
+
+
+    def get_mutual_information(self, feature, max_tic=3, stride=10):
+        """
+        Get the mutual information between the feature and the TICA components.
+        """
+        feature_dataframe = self.md_dataframe.get_feature([feature])
+
+        feature_data_concat = feature_dataframe[feature_dataframe.traj_time >= self.start \
+        * self.dt * 1000].iloc[:, 4:].values
+        tica_concat = np.concatenate([tica_traj[:, :max_tic] for tica_traj in \
+        self.tica_output], axis=0)
+        test_feature_TIC_MI = np.zeros((feature_data_concat.shape[1], max_tic))
+        for j in tqdm(range(max_tic), total=max_tic):
+            mi = mutual_info_regression(feature_data_concat[::stride, :],
+                                        tica_concat[::stride, j])
+            test_feature_TIC_MI[:, j] = mi
+
+        test_feature_TIC_MI_df = pd.DataFrame(
+            test_feature_TIC_MI,
+            columns=['TIC' + str(i) for i in range(1, max_tic + 1)],
+            index=feature_dataframe.columns[4:])
+
+        del feature_dataframe
+        del feature_data_concat
+        gc.collect()
+
+        return test_feature_TIC_MI_df

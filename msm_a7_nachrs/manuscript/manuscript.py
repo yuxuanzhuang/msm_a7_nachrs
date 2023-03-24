@@ -44,9 +44,9 @@ struc_2_state = {
     'EPJ': 'desensitized',
 }
 state_color_dict = {
-    'open': '#3F5C76',
-    'closed': '#656855',
-    'desensitized': '#C78E52',
+    'open': '#3F789F',
+    'closed': '#6D6A55',
+    'desensitized': '#D79E52',
     'I': '#4A235A',
     'flipped': '#4DB6AC'
     }

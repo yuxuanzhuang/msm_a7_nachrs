@@ -133,6 +133,7 @@ class MSMInitializer(object):
 
         self.md_dataframe.dataframe = self.md_dataframe.dataframe[self.md_dataframe.dataframe.system.isin(self.system_exclusion) == False].reset_index(drop=True)
         system_array = self.md_dataframe.dataframe.system.to_numpy()
+        self.n_trajectories = len(np.unique(system_array))
 
         def fill_missing_values(system_array):
             diff_arr = (np.diff(system_array, prepend=0) != 0) & (np.diff(system_array, prepend=0) != 1)
@@ -180,6 +181,8 @@ class MSMInitializer(object):
     
     def gather_feature_matrix(self):
         """load feature matrix into memory"""
+        if self.feature_input_list == []:
+            raise ValueError('No feature selected yet, please use add_feature() first')
         self.feature_trajectories = []
         feature_df = self.md_dataframe.get_feature(self.feature_input_list,
                     in_memory=False)
@@ -208,35 +211,6 @@ class MSMInitializer(object):
             else:
                 self.feature_trajectories.append(feature_trajectory)
         self.data_collected = True
-                
-
-    def dump_feature_trajectories(self):
-        if self.data_collected:
-            if self.dumping:
-                for ind, feature_matrix in enumerate(
-                        self.feature_trajectories):
-                    np.save(
-                        self.filename +
-                        f'feature_traj_{ind}.npy',
-                        feature_matrix)
-            print('Feature matrix saved')
-            self.data_collected = False
-
-        del self.feature_trajectories
-        gc.collect()
-
-
-    def get_feature_trajectories(self):
-        if self.data_collected:
-            return self.feature_trajectories
-        else:
-            self.feature_trajectories = []
-            for ind in range(self.n_trajectories):
-                self.feature_trajectories.append(
-                    np.load(
-                        self.filename +
-                        f'feature_traj_{ind}.npy',
-                        allow_pickle=True))
 
     def start_analysis(self):
         os.makedirs(self.filename, exist_ok=True)
@@ -249,7 +223,8 @@ class MSMInitializer(object):
                                  meaningful_tic=None,
                                  updating=False,
                                  max_iter=1000):
-        if self.tica_output is None:
+        # if attr tica_output is None, then tica is not performed
+        if not hasattr(self, 'tica_output'):
             raise ValueError('TICA output not available')
         self.n_clusters = n_clusters
 

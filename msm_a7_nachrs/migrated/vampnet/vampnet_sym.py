@@ -17,8 +17,11 @@ from .vampnet import VAMPNet_Multimer, VAMPNet_Multimer_AUG
 from .score import vamp_score_sym, vamp_score_rev
 
 class VAMPNet_Multimer_SYM(VAMPNet_Multimer_AUG):
-    def partial_fit(self, data, train_score_callback: Callable[[
-                    int, torch.Tensor], None] = None, tb_writer=None):
+    def partial_fit(self,
+                    data,
+                    train_score_callback: Callable[[
+                    int, torch.Tensor], None] = None,
+                    tb_writer=None):
         self.prepare_partial_fit()
 
         assert isinstance(data, (list, tuple)) and len(data) == 2, \
@@ -73,8 +76,8 @@ class VAMPNet_Multimer_SYM(VAMPNet_Multimer_AUG):
                 epsilon=self.epsilon,
                 mode=self.score_mode)
         else:
-            loss_value_full = None
-            loss_value_deg = None
+            score_value_full = None
+            score_value_deg = None
         self.append_training_score(self._step, -loss_value,
                           score_value_full, score_value_deg)
 
@@ -185,8 +188,8 @@ class VAMPNet_Multimer_SYM_REV(VAMPNet_Multimer_SYM):
                 epsilon=self.epsilon,
                 mode=self.score_mode)
         else:
-            loss_value_full = None
-            loss_value_deg = None
+            score_value_full = None
+            score_value_deg = None
         self.append_training_score(self._step, -loss_value,
                           score_value_full, score_value_deg)
 

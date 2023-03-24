@@ -13,7 +13,9 @@ from deeptime.base import EstimatorTransformer
 from deeptime.basis import Identity, Observable, Concatenation
 from deeptime.covariance import Covariance, CovarianceModel
 from deeptime.numeric import spd_inv_split, eig_corr
-from deeptime.util.types import to_dataset
+from deeptime.util.types import to_dataset, is_timelagged_dataset, ensure_timeseries_data
+from deeptime.util.data import TimeLaggedDataset, TrajectoryDataset, TrajectoriesDataset
+from typing import Tuple, Optional, Union, List
 
 
 class SymVAMP(VAMP):
@@ -395,3 +397,190 @@ class Concatenation_Multimer(Concatenation):
         result = self.obs2(x)
         result = result.reshape(result.shape[0], self.symmetry_fold, -1)
         return self.obs1(result)
+    
+
+class SymVAMP_NOAUG(SymVAMP):
+    r"""Variational approach for Markov processes (VAMP) with a symmetric observable transform.
+    """
+
+    def __init__(self, symmetry_fold: int =1,
+                 lagtime: Optional[int] = None,
+                 dim: Optional[int] = None,
+                 var_cutoff: Optional[float] = None,
+                 scaling: Optional[str] = None,
+                 epsilon: float = 1e-6,
+                 observable_transform: Callable[[np.ndarray], np.ndarray] = Identity()):
+        super().__init__(lagtime=lagtime,
+                         dim=dim,
+                         var_cutoff=var_cutoff,
+                         scaling=scaling,
+                         epsilon=epsilon,
+                         observable_transform=observable_transform)
+        self.symmetry_fold = symmetry_fold
+
+    _DiagonalizationResults = namedtuple("DiagonalizationResults", ['rank0', 'rankt', 'singular_values',
+                                                                    'left_singular_vecs', 'right_singular_vecs',
+                                                                    'left_singular_vecs_full', 'right_singular_vecs_full',
+                                                                    'cov'])
+
+    @staticmethod
+    def _decomposition(covariances, epsilon, scaling, dim, var_cutoff, symmetry_fold) -> _DiagonalizationResults:
+        """Performs SVD on covariance matrices and save left, right singular vectors and values in the model."""               
+        cov_00 = covariances.cov_00
+        cov_0t = covariances.cov_0t
+        cov_tt = covariances.cov_tt
+
+        cov = CovarianceModel(cov_00=cov_00, cov_0t=cov_0t, cov_tt=cov_tt,
+                              mean_0=covariances.mean_0,
+                              mean_t=covariances.mean_t,)
+
+        L0 = spd_inv_split(cov_00, epsilon=epsilon)
+        rank0 = L0.shape[1] if L0.ndim == 2 else 1
+        Lt = spd_inv_split(cov_tt, epsilon=epsilon)
+        rankt = Lt.shape[1] if Lt.ndim == 2 else 1
+
+        W = np.dot(L0.T, cov_0t).dot(Lt)
+        from scipy.linalg import svd
+        A, s, BT = svd(W, compute_uv=True, lapack_driver='gesvd')
+
+        singular_values = s
+
+        m = CovarianceKoopmanModel.effective_output_dimension(rank0, rankt, dim, var_cutoff, singular_values)
+
+        U = np.dot(L0, A[:, :m])
+        V = np.dot(Lt, BT[:m, :].T)
+
+        # scale vectors
+        if scaling is not None and scaling in ("km", "kinetic_map"):
+            U *= s[np.newaxis, 0:m]  # scaled left singular functions induce a kinetic map
+            V *= s[np.newaxis, 0:m]  # scaled right singular functions induce a kinetic map wrt. backward propagator
+
+        return SymVAMP_NOAUG._DiagonalizationResults(
+            rank0=rank0, rankt=rankt,
+            singular_values=singular_values,
+            left_singular_vecs_full=np.tile(U, symmetry_fold),
+            right_singular_vecs_full=np.tile(V, symmetry_fold),
+            left_singular_vecs=U,
+            right_singular_vecs=V,
+            cov=covariances
+        )
+
+    def partial_fit(self, data):
+        r""" Updates the covariance estimates through a new batch of data.
+
+        Parameters
+        ----------
+        data : tuple(ndarray, ndarray)
+            A tuple of ndarrays which have to have same shape and are :math:`X_t` and :math:`X_{t+\tau}`, respectively.
+            Here, :math:`\tau` denotes the lagtime.
+
+        Returns
+        -------
+        self : VAMP
+            Reference to self.
+        """
+        if self._covariance_estimator is None:
+            self._covariance_estimator = self.covariance_estimator(lagtime=self.lagtime)
+        x, y = to_multimer_dataset(data,
+                                   symmetry_fold=self.symmetry_fold,
+                                   lagtime=self.lagtime)[:]
+        self._covariance_estimator.partial_fit((self.observable_transform(x),
+                                                self.observable_transform(y)))
+        return self
+
+    def fit_from_timeseries(self, data, weights=None):
+        r""" Estimates a :class:`CovarianceKoopmanModel` directly from time-series data using the :class:`Covariance`
+        estimator. For parameters `dim`, `scaling`, `epsilon`.
+
+        Parameters
+        ----------
+        data
+            Input data, see :meth:`to_dataset <deeptime.util.types.to_dataset>` for options.
+        weights
+            See the :class:`Covariance <deeptime.covariance.Covariance>` estimator.
+
+        Returns
+        -------
+        self : VAMP
+            Reference to self.
+        """
+        dataset = to_multimer_dataset(data,
+                                      symmetry_fold=self.symmetry_fold,
+                                      lagtime=self.lagtime)
+        self._covariance_estimator = self.covariance_estimator(lagtime=self.lagtime)
+        x, y = dataset[:]
+        transformed = (self.observable_transform(x), self.observable_transform(y))
+        covariances = self._covariance_estimator.partial_fit(transformed, weights=weights).fetch_model()
+        return self.fit_from_covariances(covariances)
+
+    def _decompose(self, covariances: CovarianceModel):
+        decomposition = self._decomposition(covariances,
+                                            self.epsilon,
+                                            self.scaling,
+                                            self.dim,
+                                            self.var_cutoff,
+                                            self.symmetry_fold)
+        return CovarianceKoopmanModel(
+            decomposition.left_singular_vecs, decomposition.singular_values, decomposition.right_singular_vecs,
+            rank_0=decomposition.rank0, rank_t=decomposition.rankt, dim=self.dim,
+            var_cutoff=self.var_cutoff, cov=covariances, scaling=self.scaling, epsilon=self.epsilon,
+            instantaneous_obs=self.observable_transform,
+            timelagged_obs=self.observable_transform
+        )
+
+class SymTICA_NOAUG(SymVAMP_NOAUG, TICA):
+    def __init__(self, symmetry_fold,
+                 lagtime: Optional[int] = None, epsilon: float = 1e-6, dim: Optional[int] = None,
+                 var_cutoff: Optional[float] = None, scaling: Optional[str] = 'kinetic_map',
+                 observable_transform: Callable[[np.ndarray], np.ndarray] = Identity()):
+        SymVAMP.__init__(self, symmetry_fold=symmetry_fold,
+                                   lagtime=lagtime, dim=dim, var_cutoff=var_cutoff,
+                                   scaling=scaling, epsilon=epsilon,
+                                   observable_transform=observable_transform)
+
+def to_multimer_dataset(data: Union[TimeLaggedDataset, Tuple[np.ndarray, np.ndarray], np.ndarray],
+                        symmetry_fold: int,
+                        lagtime: Optional[int] = None):
+    if isinstance(data, np.ndarray) and data.ndim >= 3:
+        data_multimer = []
+        # assume the third axis is the feature axis
+        for x in np.split(data, symmetry_fold, axis=2):
+            data_multimer.append(x)
+            data = data_multimer
+
+    if isinstance(data, tuple):
+        if len(data) != 2:
+            raise ValueError(f"If data is provided as tuple the length must be 2 but was {len(data)}.")
+        
+        datasets = []
+        for x, y in zip(np.split(data[0], symmetry_fold, axis=1),
+                        np.split(data[1], symmetry_fold, axis=1)):
+            datasets.append(TimeLaggedDataset(x, y))
+        return datasets
+
+    if isinstance(data, np.ndarray):
+        if lagtime is None:
+            raise ValueError("In case data is a single trajectory the lagtime must be given.")
+        return TrajectoriesDataset.from_numpy(lagtime, [data_sub for data_sub in np.split(data, symmetry_fold, axis=1)])
+    
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], np.ndarray):
+        data = ensure_timeseries_data(data)
+        traj_list = []
+        for traj in data:
+            traj_list.extend([traj_sub for traj_sub in np.split(traj, symmetry_fold, axis=1)])
+        return TrajectoriesDataset.from_numpy(lagtime, traj_list)
+
+    if isinstance(data, TrajectoryDataset):
+        traj_list = []
+        for data_sub in np.split(data.data, 2, axis=1):
+            print(data_sub.shape)
+            for data_lagged_sub in np.split(data.data_lagged, 2, axis=1):
+                traj_list.append(np.asarray([data_sub, data_lagged_sub]).T)
+        return TrajectoriesDataset.from_numpy(lagtime, traj_list)
+    assert hasattr(data, '__len__') and len(data) > 0, "Data is empty."
+
+    assert is_timelagged_dataset(data), \
+        "Data is not a time-lagged dataset, i.e., yielding tuples of instantaneous and time-lagged data. " \
+        "In case of multiple trajectories, deeptime.util.data.TrajectoriesDataset may be used."
+    
+    return data

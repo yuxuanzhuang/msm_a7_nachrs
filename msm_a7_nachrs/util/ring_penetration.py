@@ -73,6 +73,7 @@ def build_topology(universe, selection):
 
     #  Atoms
     natom = universe.atoms.n_atoms
+    print('Number of atoms: {}'.format(natom))
     for atom in universe.select_atoms(selection).atoms:  # might be buggy
         g.add_node(atom.index + 1, **{'segid': atom.segid,
                                       'resname': atom.resname,
@@ -241,8 +242,9 @@ def check_universe_ring_penetration(universe,
     ag = universe.select_atoms(selection)
     for frame, ts in enumerate(universe.trajectory):
         output_text.append('In frame %d' % frame)
-        coord = dict(zip(ag.ids + 1, ag.positions))
+        coord = dict(zip(ag.indices + 1, ag.positions))
         if len(top.nodes()) != len(coord):
+            print(len(top.nodes()), len(coord))
             raise ValueError('Number of atoms does not match')
         #  only rect pbc have been tested
         pairs, rings = check_ring_penetration(top, coord, verbose=verbose)
