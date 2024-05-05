@@ -1,32 +1,26 @@
-=============
-MSM_a7_nachrs
-=============
+====================================================
+Scripts for system building of a7 nicotinic receptor
+====================================================
 
+Accompanying scripts for the paper
+"Symmetry-adapted Markov state models of closing, opening, and desensitizing in α7 nicotinic acetylcholine receptors"
+https://www.biorxiv.org/content/10.1101/2023.12.04.569956v1.
 
-.. image:: https://img.shields.io/pypi/v/msm_a7_nachrs.svg
-        :target: https://pypi.python.org/pypi/msm_a7_nachrs
+Please check https://github.com/yuxuanzhuang/sym_msm for
+the essential tools to perform markov state models on symmetric systems
 
-.. image:: https://img.shields.io/travis/yuxuanzhuang/msm_a7_nachrs.svg
-        :target: https://travis-ci.com/yuxuanzhuang/msm_a7_nachrs
-
-.. image:: https://readthedocs.org/projects/msm-a7-nachrs/badge/?version=latest
-        :target: https://msm-a7-nachrs.readthedocs.io/en/latest/?version=latest
-        :alt: Documentation Status
-
-
-
-
-Scripts for MSM building of a7 nicotinic receptor
-
+For scripts that reproduce the figures, go to https://zenodo.org/records/8424868
 
 * Free software: BSD license
-* Documentation: https://msm-a7-nachrs.readthedocs.io.
 
-
-Features
---------
-
-* TODO
+Folders
+-------
+- prep: Scripts to build the system from scratch.
+- dask_worker: Scripts to run dask workers on a cluster
+- datafile: Trajectories of structural interpolation with CLimber. 
+- manuscript: Scripts to generate figures and tables for the manuscript
+- utils: Utility functions for the project
+- migrated: Old codes that were moved to https://github.com/yuxuanzhuang/sym_msm
 
 Credits
 -------
